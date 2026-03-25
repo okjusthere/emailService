@@ -1,34 +1,11 @@
 import cron from "node-cron";
-import fs from "fs";
 import { config } from "../config.js";
 import { executeDailySend } from "./emailSender.js";
+import { getEmailContent, type EmailContent } from "./emailContentService.js";
 import { getStats } from "./subscriberService.js";
 import { logger } from "../utils/logger.js";
 
 let scheduledTask: cron.ScheduledTask | null = null;
-
-/**
- * Load email content from the saved JSON file, or use defaults.
- */
-function loadEmailContent(): {
-  subject: string;
-  bodyHtml: string;
-  bodyText: string;
-} {
-  try {
-    const path = "data/email_content.json";
-    if (fs.existsSync(path)) {
-      return JSON.parse(fs.readFileSync(path, "utf-8"));
-    }
-  } catch {}
-  return {
-    subject: "Join Us — Grow Your Real Estate Career",
-    bodyHtml: `<p>We're looking for talented and driven real estate professionals to join our growing team.</p>
-    <p>Interested? Reply to this email to learn more.</p>
-    <p>Best regards,<br><strong>The Recruiting Team</strong></p>`,
-    bodyText: `We're looking for talented real estate professionals to join our growing team.\n\nInterested? Reply to this email to learn more.\n\nBest regards,\nThe Recruiting Team`,
-  };
-}
 
 /**
  * Start the cron scheduler for daily email sends
@@ -53,7 +30,7 @@ export function startScheduler(): void {
     logger.info("Subscriber stats before send:", stats);
 
     try {
-      const content = loadEmailContent();
+      const content = getEmailContent();
       const result = await executeDailySend(content);
       logger.success(
         `Daily send finished. Batch: ${result.batchId}, Sent: ${result.totalSent}, Failed: ${result.totalFailed}`
@@ -81,14 +58,14 @@ export function stopScheduler(): void {
  * Trigger an immediate send (for testing or manual trigger)
  */
 export async function triggerManualSend(
-  content?: { subject: string; bodyHtml: string; bodyText: string }
+  content?: EmailContent
 ): Promise<void> {
   logger.info("=== Manual send triggered ===");
   const stats = getStats();
   logger.info("Subscriber stats:", stats);
 
   try {
-    const emailContent = content || loadEmailContent();
+    const emailContent = content || getEmailContent();
     const result = await executeDailySend(emailContent);
     logger.success(
       `Manual send finished. Batch: ${result.batchId}, Sent: ${result.totalSent}, Failed: ${result.totalFailed}`

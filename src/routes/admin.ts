@@ -3,46 +3,89 @@ import multer from "multer";
 import fs from "fs";
 import { requireAuth } from "../utils/auth.js";
 import { config } from "../config.js";
-import {
-  getNextBatch,
-  getStats,
-  findByEmail,
-  addSubscriber,
-  updateSubscriberStatus,
-  bulkImport,
-} from "../services/subscriberService.js";
+import { getStats, addSubscriber, bulkImport } from "../services/subscriberService.js";
 import { triggerManualSend } from "../services/scheduler.js";
 import { sendTestEmail } from "../services/emailSender.js";
 import { getEffectiveDailyLimit } from "../utils/warmup.js";
 import { buildRecruitmentEmail } from "../templates/recruitmentEmail.js";
 import { getDb } from "../db/connection.js";
 import { logger } from "../utils/logger.js";
+import {
+  createEmailAsset,
+  deleteEmailAsset,
+  hasEmbeddedAssets,
+  isAllowedEmailAssetType,
+  listEmailAssets,
+  MAX_EMAIL_ASSET_SIZE,
+  resolveAssetPlaceholdersToPublicUrls,
+} from "../services/emailAssetService.js";
+import {
+  getEmailContent,
+  normalizeEmailContent,
+  saveEmailContent,
+  type EmailContent,
+} from "../services/emailContentService.js";
 
 const router = Router();
 
-// All admin routes require auth
 router.use(requireAuth);
 
-const upload = multer({ dest: "/tmp/uploads/" });
+const csvUpload = multer({ dest: "/tmp/uploads/" });
+const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_EMAIL_ASSET_SIZE },
+  fileFilter: (_req, file, cb) => {
+    if (!isAllowedEmailAssetType(file.mimetype)) {
+      cb(new Error("Unsupported image type. Use PNG, JPG, GIF, or WebP."));
+      return;
+    }
 
-// ── Dashboard Stats ────────────────────────────────
+    cb(null, true);
+  },
+});
+
+function getRequestBaseUrl(req: Request): string {
+  const proto = req.get("x-forwarded-proto") || req.protocol;
+  const host = req.get("x-forwarded-host") || req.get("host");
+  return host ? `${proto}://${host}` : config.baseUrl;
+}
+
+function buildEmailContentResponse(content: EmailContent) {
+  return {
+    ...content,
+    deliveryMode: hasEmbeddedAssets(content.bodyHtml) ? "inline" : "batch",
+  };
+}
+
+function buildPreviewEmail(content: EmailContent, baseUrl: string): string {
+  const resolved = resolveAssetPlaceholdersToPublicUrls(content.bodyHtml, baseUrl);
+
+  if (resolved.missingAssetIds.length > 0) {
+    logger.warn("Preview is missing embedded assets", resolved.missingAssetIds);
+  }
+
+  return buildRecruitmentEmail({
+    recipientName: "John Doe",
+    subject: content.subject,
+    bodyHtml: resolved.html,
+    unsubscribeUrl: `${baseUrl}/unsubscribe?token=preview-token`,
+  });
+}
+
 router.get("/stats", (_req: Request, res: Response) => {
   const db = getDb();
   const subscriberStats = getStats();
 
-  // Recent batches
   const recentBatches = db
     .prepare(`SELECT * FROM batches ORDER BY created_at DESC LIMIT 10`)
     .all();
 
-  // Today's send count
   const todaySent = db
     .prepare(
       `SELECT COUNT(*) as count FROM send_logs WHERE date(sent_at) = date('now')`
     )
     .get() as { count: number };
 
-  // Engagement stats
   const engagement = db
     .prepare(
       `SELECT
@@ -56,7 +99,6 @@ router.get("/stats", (_req: Request, res: Response) => {
     )
     .get() as any;
 
-  // Warmup status
   const warmup = getEffectiveDailyLimit();
 
   res.json({
@@ -88,7 +130,6 @@ router.get("/stats", (_req: Request, res: Response) => {
   });
 });
 
-// ── Subscriber List ────────────────────────────────
 router.get("/subscribers", (req: Request, res: Response) => {
   const db = getDb();
   const page = parseInt(req.query.page as string) || 1;
@@ -133,61 +174,72 @@ router.get("/subscribers", (req: Request, res: Response) => {
   });
 });
 
-// ── Delete Subscriber ──────────────────────────────
 router.delete("/subscribers/:id", (req: Request, res: Response) => {
   const db = getDb();
   const result = db
     .prepare("DELETE FROM subscribers WHERE id = ?")
     .run(req.params.id);
+
   if (result.changes > 0) {
     res.json({ success: true });
-  } else {
-    res.status(404).json({ error: "Subscriber not found" });
+    return;
   }
+
+  res.status(404).json({ error: "Subscriber not found" });
 });
 
-// ── Add Single Subscriber ──────────────────────────
 router.post("/subscribers", (req: Request, res: Response) => {
   const { email, name } = req.body;
+
   if (!email) {
     res.status(400).json({ error: "Email is required" });
     return;
   }
-  const sub = addSubscriber(email, name);
-  if (sub) {
-    res.json({ success: true, subscriber: sub });
-  } else {
+
+  const subscriber = addSubscriber(email, name);
+
+  if (!subscriber) {
     res.status(409).json({ error: "Subscriber already exists" });
+    return;
   }
+
+  res.json({ success: true, subscriber });
 });
 
-// ── Bulk Delete ────────────────────────────────────
 router.post("/subscribers/bulk-delete", (req: Request, res: Response) => {
   const { ids } = req.body;
+
   if (!Array.isArray(ids) || ids.length === 0) {
     res.status(400).json({ error: "ids array is required" });
     return;
   }
+
   const db = getDb();
   const placeholders = ids.map(() => "?").join(",");
   const result = db
     .prepare(`DELETE FROM subscribers WHERE id IN (${placeholders})`)
     .run(...ids);
+
   res.json({ success: true, deleted: result.changes });
 });
 
-// ── Bulk Status Update ─────────────────────────────
 router.post("/subscribers/bulk-status", (req: Request, res: Response) => {
   const { ids, status } = req.body;
+
   if (!Array.isArray(ids) || ids.length === 0 || !status) {
     res.status(400).json({ error: "ids array and status are required" });
     return;
   }
+
   const validStatuses = ["active", "unsubscribed", "bounced", "complained"];
+
   if (!validStatuses.includes(status)) {
-    res.status(400).json({ error: `Invalid status. Valid: ${validStatuses.join(", ")}` });
+    res.status(400).json({
+      error: `Invalid status. Valid: ${validStatuses.join(", ")}`,
+    });
     return;
   }
+
   const db = getDb();
   const placeholders = ids.map(() => "?").join(",");
   const result = db
@@ -195,16 +247,17 @@ router.post("/subscribers/bulk-status", (req: Request, res: Response) => {
       `UPDATE subscribers SET status = ?, updated_at = datetime('now') WHERE id IN (${placeholders})`
     )
     .run(status, ...ids);
+
   res.json({ success: true, updated: result.changes });
 });
 
-// ── CSV Export ──────────────────────────────────────
 router.get("/subscribers/export", (req: Request, res: Response) => {
   const db = getDb();
   const status = req.query.status as string;
 
   let where = "1=1";
   const params: any[] = [];
+
   if (status && status !== "all") {
     where += " AND status = ?";
     params.push(status);
@@ -217,11 +270,10 @@ router.get("/subscribers/export", (req: Request, res: Response) => {
     )
     .all(...params) as any[];
 
-  // Build CSV
   const header = "email,name,status,send_count,last_sent_at,created_at";
   const rows = subscribers.map(
-    (s) =>
-      `"${s.email}","${s.name || ""}","${s.status}",${s.send_count || 0},"${s.last_sent_at || ""}","${s.created_at}"`
+    (subscriber) =>
+      `"${subscriber.email}","${subscriber.name || ""}","${subscriber.status}",${subscriber.send_count || 0},"${subscriber.last_sent_at || ""}","${subscriber.created_at}"`
   );
   const csv = [header, ...rows].join("\n");
 
@@ -233,10 +285,9 @@ router.get("/subscribers/export", (req: Request, res: Response) => {
   res.send(csv);
 });
 
-// ── CSV Upload ─────────────────────────────────────
 router.post(
   "/subscribers/upload",
-  upload.single("csv"),
+  csvUpload.single("csv"),
   (req: Request, res: Response) => {
     if (!req.file) {
       res.status(400).json({ error: "No file uploaded" });
@@ -252,23 +303,30 @@ router.post(
         return;
       }
 
-      const header = lines[0].toLowerCase().split(",").map((h) => h.trim());
-      const emailIdx = header.indexOf("email");
-      const nameIdx = header.indexOf("name");
+      const header = lines[0].toLowerCase().split(",").map((part) => part.trim());
+      const emailIndex = header.indexOf("email");
+      const nameIndex = header.indexOf("name");
 
-      if (emailIdx === -1) {
+      if (emailIndex === -1) {
         res.status(400).json({ error: 'CSV must have an "email" column' });
         return;
       }
 
       const users: { email: string; name?: string }[] = [];
-      for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i].split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
-        const email = cols[emailIdx];
-        if (!email || !email.includes("@")) continue;
+
+      for (let index = 1; index < lines.length; index++) {
+        const columns = lines[index]
+          .split(",")
+          .map((part) => part.trim().replace(/^"|"$/g, ""));
+        const email = columns[emailIndex];
+
+        if (!email || !email.includes("@")) {
+          continue;
+        }
+
         users.push({
           email: email.toLowerCase(),
-          name: nameIdx >= 0 ? cols[nameIdx] || undefined : undefined,
+          name: nameIndex >= 0 ? columns[nameIndex] || undefined : undefined,
         });
       }
 
@@ -279,120 +337,130 @@ router.post(
         skipped: result.skipped,
         total: users.length,
       });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
     } finally {
-      if (req.file) fs.unlinkSync(req.file.path);
+      if (req.file && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
     }
   }
 );
 
-// ── Email Content ──────────────────────────────────
-const CONTENT_PATH = "data/email_content.json";
+router.get("/email-assets", (req: Request, res: Response) => {
+  res.json({ assets: listEmailAssets(getRequestBaseUrl(req)) });
+});
 
-function getEmailContent(): {
-  subject: string;
-  bodyHtml: string;
-  bodyText: string;
-} {
-  try {
-    if (fs.existsSync(CONTENT_PATH)) {
-      return JSON.parse(fs.readFileSync(CONTENT_PATH, "utf-8"));
+router.post("/email-assets", (req: Request, res: Response) => {
+  imageUpload.single("image")(req, res, (error) => {
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
     }
-  } catch {}
-  return {
-    subject: "Join Us — Grow Your Real Estate Career",
-    bodyHtml: `
-    <p>We're looking for talented and driven real estate professionals to join our growing team.</p>
-    <p><strong>Why Us?</strong></p>
-    <ul>
-      <li>Competitive commission splits</li>
-      <li>Comprehensive training and mentorship</li>
-      <li>Advanced technology and marketing support</li>
-      <li>A collaborative, growth-oriented culture</li>
-    </ul>
-    <p>Interested? Reply to this email to learn more.</p>
-    <p>Best regards,<br><strong>The Recruiting Team</strong></p>`,
-    bodyText: `We're looking for talented and driven real estate professionals to join our growing team.
 
-Why Us?
-- Competitive commission splits
-- Comprehensive training and mentorship
-- Advanced technology and marketing support
-- A collaborative, growth-oriented culture
+    if (!req.file) {
+      res.status(400).json({ error: "No image uploaded" });
+      return;
+    }
 
-Interested? Reply to this email to learn more.
+    try {
+      const asset = createEmailAsset({
+        buffer: req.file.buffer,
+        originalName: req.file.originalname,
+        mimeType: req.file.mimetype,
+        size: req.file.size,
+        baseUrl: getRequestBaseUrl(req),
+      });
 
-Best regards,
-The Recruiting Team`,
-  };
-}
+      logger.info("Email asset uploaded", {
+        id: asset.id,
+        name: asset.originalName,
+      });
 
-function saveEmailContent(content: {
-  subject: string;
-  bodyHtml: string;
-  bodyText: string;
-}): void {
-  const dir = "data";
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(CONTENT_PATH, JSON.stringify(content, null, 2));
-}
+      res.json({ success: true, asset });
+    } catch (uploadError: any) {
+      res.status(400).json({ error: uploadError.message });
+    }
+  });
+});
+
+router.delete("/email-assets/:id", (req: Request, res: Response) => {
+  const assetId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+
+  if (!deleteEmailAsset(assetId)) {
+    res.status(404).json({ error: "Asset not found" });
+    return;
+  }
+
+  logger.info("Email asset deleted", { id: assetId });
+  res.json({ success: true });
+});
 
 router.get("/email-content", (_req: Request, res: Response) => {
-  res.json(getEmailContent());
+  res.json(buildEmailContentResponse(getEmailContent()));
 });
 
 router.put("/email-content", (req: Request, res: Response) => {
   const { subject, bodyHtml, bodyText } = req.body;
+
   if (!subject || !bodyHtml || !bodyText) {
     res.status(400).json({ error: "subject, bodyHtml, bodyText are required" });
     return;
   }
-  saveEmailContent({ subject, bodyHtml, bodyText });
+
+  const savedContent = saveEmailContent({ subject, bodyHtml, bodyText });
   logger.info("Email content updated via admin");
-  res.json({ success: true });
+  res.json({ success: true, content: buildEmailContentResponse(savedContent) });
 });
 
-// ── Full Email Preview ─────────────────────────────
-router.get("/email-preview", (_req: Request, res: Response) => {
-  const content = getEmailContent();
-  const fullHtml = buildRecruitmentEmail({
-    recipientName: "John Doe",
-    subject: content.subject,
-    bodyHtml: content.bodyHtml,
-    unsubscribeUrl: `${config.baseUrl}/unsubscribe?token=preview-token`,
+router.get("/email-preview", (req: Request, res: Response) => {
+  res.send(buildPreviewEmail(getEmailContent(), getRequestBaseUrl(req)));
+});
+
+router.post("/email-preview", (req: Request, res: Response) => {
+  const { subject, bodyHtml, bodyText } = req.body;
+
+  if (!subject || !bodyHtml) {
+    res.status(400).json({ error: "subject and bodyHtml are required" });
+    return;
+  }
+
+  const content = normalizeEmailContent({
+    subject,
+    bodyHtml,
+    bodyText: bodyText || "",
   });
-  res.send(fullHtml);
+
+  res.send(buildPreviewEmail(content, getRequestBaseUrl(req)));
 });
 
-// ── Test Send ──────────────────────────────────────
 router.post("/test-send", async (req: Request, res: Response) => {
   const { email } = req.body;
+
   if (!email) {
     res.status(400).json({ error: "email is required" });
     return;
   }
-  const content = getEmailContent();
-  const result = await sendTestEmail(email, content);
+
+  const result = await sendTestEmail(email, getEmailContent());
+
   if (result.success) {
     res.json({ success: true, message: `Test email sent to ${email}` });
-  } else {
-    res.status(500).json({ error: result.error });
+    return;
   }
+
+  res.status(500).json({ error: result.error });
 });
 
-// ── Send Now ───────────────────────────────────────
 router.post("/send-now", async (_req: Request, res: Response) => {
   try {
-    const content = getEmailContent();
-    await triggerManualSend(content);
+    await triggerManualSend(getEmailContent());
     res.json({ success: true, message: "Send triggered" });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
 });
 
-// ── Send History ───────────────────────────────────
 router.get("/batches", (_req: Request, res: Response) => {
   const db = getDb();
   const batches = db
@@ -416,10 +484,8 @@ router.get("/batches/:id/logs", (req: Request, res: Response) => {
   res.json({ logs });
 });
 
-// ── Login check ────────────────────────────────────
 router.get("/me", (_req: Request, res: Response) => {
   res.json({ authenticated: true });
 });
 
-export { getEmailContent };
 export default router;

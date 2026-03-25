@@ -3,6 +3,25 @@ let apiSecret = localStorage.getItem("apiSecret") || "";
 let currentPage = "dashboard";
 let subscriberPage = 1;
 let selectedIds = new Set();
+let emailAssets = [];
+
+const INLINE_ASSET_PATTERN = /\{\{asset:[a-z0-9-]+\}\}/gi;
+const HTML_SNIPPETS = {
+  intro: `<p>We're reaching out because we're expanding our team and looking for ambitious real estate professionals who want more momentum, more support, and a sharper brand behind them.</p>`,
+  "feature-list": `<p><strong>Why top producers join us:</strong></p>
+<ul>
+  <li>Sharper lead flow and marketing systems</li>
+  <li>Hands-on operational support that removes friction</li>
+  <li>A culture built around speed, visibility, and growth</li>
+</ul>`,
+  cta: `<p style="margin: 28px 0;">
+  <a href="mailto:hello@example.com" style="display:inline-block;padding:14px 22px;background:#111827;color:#ffffff;text-decoration:none;border-radius:999px;font-weight:700;">
+    Reply to Start the Conversation
+  </a>
+</p>`,
+  divider: `<hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0;">`,
+  signature: `<p>Best regards,<br><strong>The Recruiting Team</strong></p>`,
+};
 
 // ── API Helper ───────────────────────────
 async function api(path, options = {}) {
@@ -293,57 +312,275 @@ document.getElementById("add-form")?.addEventListener("submit", async (e) => {
 // ── Email Compose ────────────────────────
 async function loadEmailContent() {
   try {
-    const res = await api("/email-content");
-    const data = await res.json();
-    document.getElementById("email-subject").value = data.subject || "";
-    document.getElementById("email-html").value = data.bodyHtml || "";
-    document.getElementById("email-text").value = data.bodyText || "";
+    const [contentRes, assetRes] = await Promise.all([
+      api("/email-content"),
+      api("/email-assets"),
+    ]);
+    const content = await contentRes.json();
+    const assetData = await assetRes.json();
+    emailAssets = assetData.assets || [];
+    applyEmailContent(content);
+    renderAssetList();
     updatePreview();
   } catch { toast("Failed to load email content", "error"); }
 }
 
+function getCurrentEmailContent() {
+  return {
+    subject: document.getElementById("email-subject").value,
+    bodyHtml: document.getElementById("email-html").value,
+    bodyText: document.getElementById("email-text").value,
+  };
+}
+
+function applyEmailContent(content) {
+  document.getElementById("email-subject").value = content.subject || "";
+  document.getElementById("email-html").value = content.bodyHtml || "";
+  document.getElementById("email-text").value = content.bodyText || "";
+  updateDeliveryModeBanner(content.bodyHtml || "");
+}
+
+function updateDeliveryModeBanner(html = document.getElementById("email-html").value) {
+  const banner = document.getElementById("delivery-mode-banner");
+  banner.classList.remove("hidden");
+  banner.textContent = hasInlineAssets(html)
+    ? "Inline images detected. Preview uses hosted URLs, while live sends will automatically switch to throttled single-send mode with real cid attachments."
+    : "No inline image placeholders detected. Sends will stay on the faster Resend batch path.";
+}
+
+function renderAssetList() {
+  const container = document.getElementById("asset-list");
+  if (!emailAssets.length) {
+    container.innerHTML = '<div class="asset-empty">No inline images uploaded yet.</div>';
+    return;
+  }
+
+  container.innerHTML = emailAssets.map((asset) => `
+    <article class="asset-card">
+      <img src="${asset.publicUrl}" alt="${escapeAttribute(asset.originalName)}">
+      <div class="asset-card-body">
+        <div class="asset-name">${escapeHtml(asset.originalName)}</div>
+        <div class="asset-meta">${formatBytes(asset.size)} · ${asset.mimeType}</div>
+        <div class="asset-placeholder"><code>${escapeHtml(asset.placeholder)}</code></div>
+        <div class="asset-actions">
+          <button type="button" class="btn-secondary btn-sm" onclick="insertInlineAsset('${asset.id}')">Insert</button>
+          <button type="button" class="btn-secondary btn-sm" onclick="copyAssetUrl('${asset.id}')">Copy URL</button>
+          <button type="button" class="btn-danger btn-sm" onclick="removeInlineAsset('${asset.id}')">Delete</button>
+        </div>
+      </div>
+    </article>
+  `).join("");
+}
+
+function createInlineImageSnippet(asset) {
+  return `\n<img src="${asset.placeholder}" alt="${escapeAttribute(stripFileExtension(asset.originalName))}" style="display:block;width:100%;max-width:560px;height:auto;margin:24px 0;border:0;border-radius:18px;">\n`;
+}
+
+function insertInlineAsset(assetId) {
+  const asset = emailAssets.find((item) => item.id === assetId);
+  if (!asset) {
+    toast("Image asset not found", "error");
+    return;
+  }
+  insertHtmlAtCursor(createInlineImageSnippet(asset));
+  toast(`Inserted ${asset.originalName}`);
+}
+
+async function copyAssetUrl(assetId) {
+  const asset = emailAssets.find((item) => item.id === assetId);
+  if (!asset) {
+    toast("Image asset not found", "error");
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(asset.publicUrl);
+    toast("Image URL copied");
+  } catch {
+    toast("Failed to copy URL", "error");
+  }
+}
+
+async function removeInlineAsset(assetId) {
+  const asset = emailAssets.find((item) => item.id === assetId);
+  if (!asset) return;
+  if (!confirm(`Delete ${asset.originalName}? Existing templates using this image will break until you replace it.`)) return;
+
+  try {
+    const res = await api(`/email-assets/${assetId}`, { method: "DELETE" });
+    const data = await res.json();
+    if (!res.ok || !data.success) throw new Error(data.error || "Delete failed");
+    emailAssets = emailAssets.filter((item) => item.id !== assetId);
+    renderAssetList();
+    updatePreview();
+    toast("Image deleted");
+  } catch (err) {
+    toast(err.message || "Failed to delete image", "error");
+  }
+}
+
+function insertHtmlSnippet(snippetKey) {
+  const snippet = HTML_SNIPPETS[snippetKey];
+  if (!snippet) return;
+  insertHtmlAtCursor(`\n${snippet}\n`);
+}
+
+function insertHtmlAtCursor(snippet) {
+  const textarea = document.getElementById("email-html");
+  const start = textarea.selectionStart ?? textarea.value.length;
+  const end = textarea.selectionEnd ?? textarea.value.length;
+  textarea.setRangeText(snippet, start, end, "end");
+  textarea.focus();
+  updatePreview();
+}
+
+function sanitizePreviewHtml(html) {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe>/gi, "")
+    .replace(/\son[a-z-]+\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, "");
+}
+
+function resolveInlineAssetUrls(html) {
+  return html.replace(INLINE_ASSET_PATTERN, (placeholder) => {
+    const asset = emailAssets.find((item) => item.placeholder === placeholder);
+    return asset ? asset.publicUrl : "";
+  });
+}
+
 function updatePreview() {
   const subject = document.getElementById("email-subject").value;
-  const html = document.getElementById("email-html").value;
+  const html = sanitizePreviewHtml(resolveInlineAssetUrls(document.getElementById("email-html").value));
   const previewContainer = document.getElementById("email-preview");
   const previewHtml = `<!DOCTYPE html><html><head><style>
-    body { font-family: -apple-system, sans-serif; padding: 24px; margin: 0; color: #333; font-size: 14px; line-height: 1.6; }
-    h2 { color: #1a365d; margin-top: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; margin: 0; color: #333; font-size: 14px; line-height: 1.6; background: #f8fafc; }
+    h2 { color: #1a365d; margin-top: 0; font-size: 24px; }
+    img { max-width: 100%; height: auto; display: block; }
+    a { color: #2563eb; }
   </style></head><body><h2>${escapeHtml(subject)}</h2><hr style="border:none;border-top:1px solid #eee;margin:16px 0">${html}</body></html>`;
   let iframe = previewContainer.querySelector("iframe");
-  if (!iframe) { iframe = document.createElement("iframe"); previewContainer.innerHTML = ""; previewContainer.appendChild(iframe); }
+  if (!iframe) {
+    iframe = document.createElement("iframe");
+    iframe.setAttribute("sandbox", "allow-same-origin");
+    iframe.setAttribute("referrerpolicy", "no-referrer");
+    previewContainer.innerHTML = "";
+    previewContainer.appendChild(iframe);
+  }
   iframe.srcdoc = previewHtml;
+  updateDeliveryModeBanner();
+}
+
+function hasInlineAssets(html) {
+  return /\{\{asset:[a-z0-9-]+\}\}/i.test(html);
+}
+
+function stripFileExtension(name) {
+  return name.replace(/\.[^.]+$/, "");
+}
+
+function escapeAttribute(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[char]));
+}
+
+function formatBytes(bytes) {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+function htmlToPlainText(html) {
+  const withBreaks = html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|section|article|li|ul|ol|h[1-6]|tr|table)>/gi, "\n");
+  const temp = document.createElement("div");
+  temp.innerHTML = sanitizePreviewHtml(resolveInlineAssetUrls(withBreaks));
+  return temp.textContent
+    .replace(/\u00a0/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function syncPlainTextFromHtml() {
+  document.getElementById("email-text").value = htmlToPlainText(
+    document.getElementById("email-html").value
+  );
+  toast("Plain text synced from HTML");
+}
+
+async function saveComposeContent(options = {}) {
+  const res = await api("/email-content", {
+    method: "PUT",
+    body: JSON.stringify(getCurrentEmailContent()),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    throw new Error(data.error || "Failed to save email content");
+  }
+  if (data.content) {
+    applyEmailContent(data.content);
+    updatePreview();
+  }
+  if (!options.quiet) toast("Email content saved!");
+  return data;
+}
+
+async function uploadInlineAsset(file) {
+  const formData = new FormData();
+  formData.append("image", file);
+
+  const res = await api("/email-assets", {
+    method: "POST",
+    body: formData,
+  });
+  const data = await res.json();
+
+  if (!res.ok || !data.success) {
+    throw new Error(data.error || "Failed to upload image");
+  }
+
+  emailAssets = [data.asset, ...emailAssets];
+  renderAssetList();
+  updatePreview();
+  toast(`Uploaded ${data.asset.originalName}`);
 }
 
 // Full email preview (with header/footer/unsubscribe)
 document.getElementById("full-preview-btn")?.addEventListener("click", async () => {
-  // Save first, then fetch the server-rendered full template
-  const content = {
-    subject: document.getElementById("email-subject").value,
-    bodyHtml: document.getElementById("email-html").value,
-    bodyText: document.getElementById("email-text").value,
-  };
-  await api("/email-content", { method: "PUT", body: JSON.stringify(content) });
-  const res = await api("/email-preview");
-  const html = await res.text();
-  const previewContainer = document.getElementById("email-preview");
-  let iframe = previewContainer.querySelector("iframe");
-  if (!iframe) { iframe = document.createElement("iframe"); previewContainer.innerHTML = ""; previewContainer.appendChild(iframe); }
-  iframe.srcdoc = html;
-  toast("Showing full email preview with template");
+  try {
+    const res = await api("/email-preview", {
+      method: "POST",
+      body: JSON.stringify(getCurrentEmailContent()),
+    });
+    const html = await res.text();
+    if (!res.ok) throw new Error("Failed to render full preview");
+    const previewContainer = document.getElementById("email-preview");
+    let iframe = previewContainer.querySelector("iframe");
+    if (!iframe) {
+      iframe = document.createElement("iframe");
+      iframe.setAttribute("sandbox", "allow-same-origin");
+      iframe.setAttribute("referrerpolicy", "no-referrer");
+      previewContainer.innerHTML = "";
+      previewContainer.appendChild(iframe);
+    }
+    iframe.srcdoc = html;
+    toast("Showing full email preview with template");
+  } catch (err) {
+    toast(err.message || "Failed to render full preview", "error");
+  }
 });
 
 document.getElementById("save-email")?.addEventListener("click", async () => {
-  const content = {
-    subject: document.getElementById("email-subject").value,
-    bodyHtml: document.getElementById("email-html").value,
-    bodyText: document.getElementById("email-text").value,
-  };
   try {
-    const res = await api("/email-content", { method: "PUT", body: JSON.stringify(content) });
-    if (res.ok) toast("Email content saved!");
-    else toast("Failed to save", "error");
-  } catch { toast("Failed to save", "error"); }
+    await saveComposeContent();
+  } catch (err) {
+    toast(err.message || "Failed to save", "error");
+  }
 });
 
 // Test Send
@@ -352,21 +589,15 @@ document.getElementById("test-send-btn")?.addEventListener("click", () => openMo
 document.getElementById("test-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();
   const email = document.getElementById("test-email").value;
-  // Save content first
-  const content = {
-    subject: document.getElementById("email-subject").value,
-    bodyHtml: document.getElementById("email-html").value,
-    bodyText: document.getElementById("email-text").value,
-  };
-  await api("/email-content", { method: "PUT", body: JSON.stringify(content) });
   try {
+    await saveComposeContent({ quiet: true });
     const res = await api("/test-send", { method: "POST", body: JSON.stringify({ email }) });
     const data = await res.json();
-    if (data.success) {
+    if (res.ok && data.success) {
       toast(`Test email sent to ${email}!`);
       closeModal("test-modal");
     } else { toast(data.error || "Test send failed", "error"); }
-  } catch { toast("Test send failed", "error"); }
+  } catch (err) { toast(err.message || "Test send failed", "error"); }
 });
 
 // Send Now
@@ -374,18 +605,13 @@ document.getElementById("send-email")?.addEventListener("click", () => openModal
 
 document.getElementById("confirm-send")?.addEventListener("click", async () => {
   closeModal("send-modal");
-  const content = {
-    subject: document.getElementById("email-subject").value,
-    bodyHtml: document.getElementById("email-html").value,
-    bodyText: document.getElementById("email-text").value,
-  };
   try {
-    await api("/email-content", { method: "PUT", body: JSON.stringify(content) });
+    await saveComposeContent({ quiet: true });
     const res = await api("/send-now", { method: "POST" });
     const data = await res.json();
-    if (data.success) toast("🚀 Send triggered successfully!");
+    if (res.ok && data.success) toast("🚀 Send triggered successfully!");
     else toast(data.error || "Send failed", "error");
-  } catch { toast("Send failed", "error"); }
+  } catch (err) { toast(err.message || "Send failed", "error"); }
 });
 
 // ── History ──────────────────────────────
@@ -456,6 +682,21 @@ document.getElementById("login-form")?.addEventListener("submit", async (e) => {
 });
 document.getElementById("logout-btn")?.addEventListener("click", logout);
 document.getElementById("refresh-stats")?.addEventListener("click", loadDashboard);
+document.getElementById("sync-text-btn")?.addEventListener("click", syncPlainTextFromHtml);
+document.getElementById("asset-file")?.addEventListener("change", async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = "";
+  if (!file) return;
+
+  try {
+    await uploadInlineAsset(file);
+  } catch (err) {
+    toast(err.message || "Failed to upload image", "error");
+  }
+});
+document.querySelectorAll(".snippet-btn").forEach((button) => {
+  button.addEventListener("click", () => insertHtmlSnippet(button.dataset.snippet));
+});
 
 let searchTimeout;
 document.getElementById("search-input")?.addEventListener("input", () => {

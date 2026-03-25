@@ -25,6 +25,10 @@ app.use(express.urlencoded({ extended: true }));
 
 // Serve admin dashboard static files
 app.use("/admin", express.static(path.join(process.cwd(), "public")));
+app.use(
+  "/email-assets",
+  express.static(path.join(process.cwd(), "data", "email-assets"))
+);
 
 // Routes
 app.use("/webhook", webhookRoutes);

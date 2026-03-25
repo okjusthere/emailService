@@ -1,5 +1,6 @@
-import { Resend } from "resend";
 import { randomUUID } from "crypto";
+import PQueue from "p-queue";
+import { Resend, type Attachment } from "resend";
 import { config } from "../config.js";
 import { getDb } from "../db/connection.js";
 import {
@@ -17,8 +18,19 @@ import {
   validateCompliance,
 } from "../utils/compliance.js";
 import { logger } from "../utils/logger.js";
+import {
+  hasEmbeddedAssets,
+  resolveAssetPlaceholdersToInlineAttachments,
+} from "./emailAssetService.js";
+import { type EmailContent } from "./emailContentService.js";
 
 let resendClient: Resend | null = null;
+
+interface PreparedEmailContent extends EmailContent {
+  attachments: Attachment[];
+  usesEmbeddedAssets: boolean;
+  resolvedBodyHtml: string;
+}
 
 function getResendClient(): Resend {
   if (!config.resendApiKey) {
@@ -32,114 +44,258 @@ function getResendClient(): Resend {
   return resendClient;
 }
 
-interface EmailContent {
-  subject: string;
-  bodyHtml: string;
-  bodyText: string;
+function getReplyTo(): string | undefined {
+  return config.replyToEmail || undefined;
 }
 
-/**
- * Send a single batch of up to 100 emails via Resend Batch API
- */
-async function sendBatch(
+function prepareEmailContent(content: EmailContent): PreparedEmailContent {
+  if (!hasEmbeddedAssets(content.bodyHtml)) {
+    return {
+      ...content,
+      attachments: [],
+      usesEmbeddedAssets: false,
+      resolvedBodyHtml: content.bodyHtml,
+    };
+  }
+
+  const resolved = resolveAssetPlaceholdersToInlineAttachments(content.bodyHtml);
+
+  if (resolved.missingAssetIds.length > 0) {
+    throw new Error(
+      `Missing embedded assets: ${resolved.missingAssetIds.join(", ")}`
+    );
+  }
+
+  return {
+    ...content,
+    attachments: resolved.attachments,
+    usesEmbeddedAssets: true,
+    resolvedBodyHtml: resolved.html,
+  };
+}
+
+function buildSubscriberEmail(
+  subscriber: Subscriber,
+  content: PreparedEmailContent
+): {
+  attachments: Attachment[];
+  headers: Record<string, string>;
+  html: string;
+  text: string;
+} {
+  const unsubscribeUrl = buildUnsubscribeUrl(subscriber.unsubscribe_token);
+  const html = buildRecruitmentEmail({
+    recipientName: subscriber.name || undefined,
+    subject: content.subject,
+    bodyHtml: content.resolvedBodyHtml,
+    unsubscribeUrl,
+  });
+  const text = buildPlainText({
+    recipientName: subscriber.name || undefined,
+    bodyText: content.bodyText,
+    unsubscribeUrl,
+  });
+
+  return {
+    attachments: content.attachments,
+    headers: getComplianceHeaders(unsubscribeUrl),
+    html,
+    text,
+  };
+}
+
+function assertCompliance(html: string): void {
+  const check = validateCompliance(html);
+
+  if (!check.valid) {
+    logger.error("CAN-SPAM compliance check failed", check.issues);
+    throw new Error(`CAN-SPAM compliance failed: ${check.issues.join(", ")}`);
+  }
+}
+
+function assertResendSuccess(
+  response: { data: any; error: any },
+  fallbackMessage: string
+): any {
+  if (response.error) {
+    throw new Error(response.error.message || fallbackMessage);
+  }
+
+  if (!response.data) {
+    throw new Error(fallbackMessage);
+  }
+
+  return response.data;
+}
+
+async function sendBatchEmails(
   subscribers: Subscriber[],
-  content: EmailContent,
+  content: PreparedEmailContent,
   batchId: string
-): Promise<{ sent: number; failed: number }> {
+): Promise<{ failed: number; sent: number }> {
   const db = getDb();
 
-  const emails = subscribers.map((sub) => {
-    const unsubscribeUrl = buildUnsubscribeUrl(sub.unsubscribe_token);
-    const html = buildRecruitmentEmail({
-      recipientName: sub.name || undefined,
-      subject: content.subject,
-      bodyHtml: content.bodyHtml,
-      unsubscribeUrl,
-    });
-    const text = buildPlainText({
-      recipientName: sub.name || undefined,
-      bodyText: content.bodyText,
-      unsubscribeUrl,
-    });
-
-    // Validate CAN-SPAM compliance on first email
-    if (sub === subscribers[0]) {
-      const check = validateCompliance(html);
-      if (!check.valid) {
-        logger.error("CAN-SPAM compliance check failed", check.issues);
-        throw new Error(
-          `CAN-SPAM compliance failed: ${check.issues.join(", ")}`
-        );
-      }
-    }
-
+  const emails = subscribers.map((subscriber) => {
+    const rendered = buildSubscriberEmail(subscriber, content);
     return {
       from: `${config.fromName} <${config.fromEmail}>`,
-      to: [sub.email],
-      reply_to: config.replyToEmail,
+      to: [subscriber.email],
+      reply_to: getReplyTo(),
       subject: content.subject,
-      html,
-      text,
-      headers: getComplianceHeaders(unsubscribeUrl),
+      html: rendered.html,
+      text: rendered.text,
+      headers: rendered.headers,
     };
   });
 
+  assertCompliance(emails[0].html);
+
   try {
     const resend = getResendClient();
-    const result = await resend.batch.send(emails);
+    const response = await resend.batch.send(emails);
+    const data = assertResendSuccess(response, "Batch send failed") as {
+      id?: string;
+    }[];
 
-    // Record send logs
-    const insertLog = db.prepare(
+    const insertSuccessLog = db.prepare(
       `INSERT INTO send_logs (batch_id, subscriber_id, resend_email_id, status, sent_at)
        VALUES (?, ?, ?, ?, datetime('now'))`
     );
-
-    const insertTx = db.transaction(() => {
-      if (result.data) {
-        const dataArr = result.data as unknown as { id: string }[];
-        for (let i = 0; i < subscribers.length; i++) {
-          const emailResult = dataArr[i];
-          insertLog.run(
-            batchId,
-            subscribers[i].id,
-            emailResult?.id || null,
-            "sent"
-          );
-        }
-      }
-    });
-    insertTx();
-
-    markAsSent(subscribers.map((s) => s.id));
-
-    const sentCount = (result.data as unknown as unknown[])?.length || 0;
-    logger.info(
-      `Batch sent: ${sentCount}/${subscribers.length} emails`
-    );
-    return { sent: sentCount, failed: subscribers.length - sentCount };
-  } catch (err: any) {
-    logger.error(`Batch send failed: ${err.message}`);
-
-    // Record failures
-    const insertFailLog = db.prepare(
+    const insertFailureLog = db.prepare(
       `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message)
        VALUES (?, ?, 'failed', ?)`
     );
-    const failTx = db.transaction(() => {
-      for (const sub of subscribers) {
-        insertFailLog.run(batchId, sub.id, err.message);
+    const successfulSubscriberIds: number[] = [];
+
+    db.transaction(() => {
+      for (let index = 0; index < subscribers.length; index++) {
+        const subscriber = subscribers[index];
+        const emailResult = data[index];
+
+        if (emailResult?.id) {
+          successfulSubscriberIds.push(subscriber.id);
+          insertSuccessLog.run(batchId, subscriber.id, emailResult.id, "sent");
+          continue;
+        }
+
+        insertFailureLog.run(
+          batchId,
+          subscriber.id,
+          "Resend batch API did not return an email id"
+        );
       }
-    });
-    failTx();
+    })();
+
+    if (successfulSubscriberIds.length > 0) {
+      markAsSent(successfulSubscriberIds);
+    }
+
+    const sent = successfulSubscriberIds.length;
+    const failed = subscribers.length - sent;
+    logger.info(`Batch sent: ${sent}/${subscribers.length} emails`);
+    return { sent, failed };
+  } catch (error: any) {
+    logger.error(`Batch send failed: ${error.message}`);
+
+    const insertFailureLog = db.prepare(
+      `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message)
+       VALUES (?, ?, 'failed', ?)`
+    );
+
+    db.transaction(() => {
+      for (const subscriber of subscribers) {
+        insertFailureLog.run(batchId, subscriber.id, error.message);
+      }
+    })();
 
     return { sent: 0, failed: subscribers.length };
   }
 }
 
-/**
- * Execute the daily email send.
- * Respects IP warmup limits if SEND_START_DATE is configured.
- */
+async function sendInlineEmails(
+  subscribers: Subscriber[],
+  content: PreparedEmailContent,
+  batchId: string
+): Promise<{ failed: number; sent: number }> {
+  const db = getDb();
+  const resend = getResendClient();
+  const queue = new PQueue({
+    concurrency: 2,
+    interval: 1000,
+    intervalCap: 2,
+  });
+
+  let sent = 0;
+  let failed = 0;
+
+  const firstEmail = buildSubscriberEmail(subscribers[0], content);
+  assertCompliance(firstEmail.html);
+
+  logger.info(
+    `Embedded assets detected; using throttled single-send mode for ${subscribers.length} recipients`
+  );
+
+  await Promise.all(
+    subscribers.map((subscriber) =>
+      queue.add(async () => {
+        const rendered = buildSubscriberEmail(subscriber, content);
+
+        try {
+          const response = await resend.emails.send({
+            attachments: rendered.attachments,
+            from: `${config.fromName} <${config.fromEmail}>`,
+            to: [subscriber.email],
+            replyTo: getReplyTo(),
+            subject: content.subject,
+            html: rendered.html,
+            text: rendered.text,
+            headers: rendered.headers,
+          });
+          const data = assertResendSuccess(
+            response,
+            `Inline send failed for ${subscriber.email}`
+          ) as { id?: string };
+
+          if (!data.id) {
+            throw new Error("Resend did not return an email id");
+          }
+
+          db.prepare(
+            `INSERT INTO send_logs (batch_id, subscriber_id, resend_email_id, status, sent_at)
+             VALUES (?, ?, ?, ?, datetime('now'))`
+          ).run(batchId, subscriber.id, data.id, "sent");
+
+          markAsSent([subscriber.id]);
+          sent += 1;
+        } catch (error: any) {
+          db.prepare(
+            `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message)
+             VALUES (?, ?, 'failed', ?)`
+          ).run(batchId, subscriber.id, error.message);
+
+          failed += 1;
+          logger.error(`Inline send failed for ${subscriber.email}: ${error.message}`);
+        }
+      })
+    )
+  );
+
+  logger.info(`Inline send complete: ${sent}/${subscribers.length} emails`);
+  return { sent, failed };
+}
+
+async function sendChunk(
+  subscribers: Subscriber[],
+  content: PreparedEmailContent,
+  batchId: string
+): Promise<{ failed: number; sent: number }> {
+  if (content.usesEmbeddedAssets) {
+    return sendInlineEmails(subscribers, content, batchId);
+  }
+
+  return sendBatchEmails(subscribers, content, batchId);
+}
+
 export async function executeDailySend(content: EmailContent): Promise<{
   batchId: string;
   totalSent: number;
@@ -158,92 +314,105 @@ export async function executeDailySend(content: EmailContent): Promise<{
     return { batchId, totalSent: 0, totalFailed: 0 };
   }
 
+  const preparedContent = prepareEmailContent(content);
+
   logger.info(
     `Starting daily send: ${subscribers.length} subscribers (limit: ${effectiveLimit}${warmup.isWarmingUp ? `, warmup day ${warmup.warmupDay}` : ""}), batch ID: ${batchId}`
   );
 
-  // Create batch record
   db.prepare(
     `INSERT INTO batches (id, total_count, status, started_at) VALUES (?, ?, 'in_progress', datetime('now'))`
   ).run(batchId, subscribers.length);
 
   let totalSent = 0;
   let totalFailed = 0;
-
-  // Split into chunks of batchSize (100)
   const chunks: Subscriber[][] = [];
-  for (let i = 0; i < subscribers.length; i += config.batchSize) {
-    chunks.push(subscribers.slice(i, i + config.batchSize));
+
+  for (let index = 0; index < subscribers.length; index += config.batchSize) {
+    chunks.push(subscribers.slice(index, index + config.batchSize));
   }
 
-  // Process chunks with rate limiting (2 req/s to stay under 5 req/s limit)
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    const result = await sendBatch(chunk, content, batchId);
-    totalSent += result.sent;
-    totalFailed += result.failed;
+  try {
+    for (let index = 0; index < chunks.length; index++) {
+      const chunk = chunks[index];
+      const result = await sendChunk(chunk, preparedContent, batchId);
+      totalSent += result.sent;
+      totalFailed += result.failed;
 
-    // Rate limit: wait 500ms between batch calls (= 2 req/s)
-    if (i < chunks.length - 1) {
-      await sleep(500);
+      if (index < chunks.length - 1) {
+        await sleep(preparedContent.usesEmbeddedAssets ? 1000 : 500);
+      }
+
+      if ((index + 1) % 10 === 0) {
+        logger.info(
+          `Progress: ${index + 1}/${chunks.length} chunks processed (${totalSent} sent, ${totalFailed} failed)`
+        );
+      }
     }
 
-    // Log progress every 10 chunks
-    if ((i + 1) % 10 === 0) {
-      logger.info(
-        `Progress: ${i + 1}/${chunks.length} chunks processed (${totalSent} sent, ${totalFailed} failed)`
-      );
-    }
+    db.prepare(
+      `UPDATE batches SET sent_count = ?, failed_count = ?, status = 'completed', completed_at = datetime('now') WHERE id = ?`
+    ).run(totalSent, totalFailed, batchId);
+
+    logger.success(
+      `Daily send complete! Batch ${batchId}: ${totalSent} sent, ${totalFailed} failed`
+    );
+
+    return { batchId, totalSent, totalFailed };
+  } catch (error) {
+    const remaining = Math.max(
+      subscribers.length - totalSent - totalFailed,
+      0
+    );
+    totalFailed += remaining;
+
+    db.prepare(
+      `UPDATE batches SET sent_count = ?, failed_count = ?, status = 'failed', completed_at = datetime('now') WHERE id = ?`
+    ).run(totalSent, totalFailed, batchId);
+
+    throw error;
   }
-
-  // Update batch record
-  db.prepare(
-    `UPDATE batches SET sent_count = ?, failed_count = ?, status = 'completed', completed_at = datetime('now') WHERE id = ?`
-  ).run(totalSent, totalFailed, batchId);
-
-  logger.success(
-    `Daily send complete! Batch ${batchId}: ${totalSent} sent, ${totalFailed} failed`
-  );
-
-  return { batchId, totalSent, totalFailed };
 }
 
-/**
- * Send a single test email to a specific address
- */
 export async function sendTestEmail(
   testEmail: string,
   content: EmailContent
-): Promise<{ success: boolean; error?: string }> {
-  const unsubscribeUrl = `${config.baseUrl}/unsubscribe?token=test-preview`;
-  const html = buildRecruitmentEmail({
-    recipientName: "Test Recipient",
-    subject: content.subject,
-    bodyHtml: content.bodyHtml,
-    unsubscribeUrl,
-  });
-  const text = buildPlainText({
-    recipientName: "Test Recipient",
-    bodyText: content.bodyText,
-    unsubscribeUrl,
-  });
-
+): Promise<{ error?: string; success: boolean }> {
   try {
+    const preparedContent = prepareEmailContent(content);
+    const previewSubscriber = {
+      email: testEmail,
+      id: 0,
+      name: "Test Recipient",
+      status: "active",
+      unsubscribe_token: "test-preview",
+      created_at: "",
+      last_sent_at: null,
+      send_count: 0,
+      updated_at: "",
+    } as Subscriber;
+    const rendered = buildSubscriberEmail(previewSubscriber, preparedContent);
+
+    assertCompliance(rendered.html);
+
     const resend = getResendClient();
-    await resend.emails.send({
+    const response = await resend.emails.send({
+      attachments: rendered.attachments,
       from: `${config.fromName} <${config.fromEmail}>`,
       to: [testEmail],
-      replyTo: config.replyToEmail,
+      replyTo: getReplyTo(),
       subject: `[TEST] ${content.subject}`,
-      html,
-      text,
-      headers: getComplianceHeaders(unsubscribeUrl),
+      html: rendered.html,
+      text: rendered.text,
+      headers: rendered.headers,
     });
+
+    assertResendSuccess(response, `Test email failed for ${testEmail}`);
     logger.info(`Test email sent to: ${testEmail}`);
     return { success: true };
-  } catch (err: any) {
-    logger.error(`Test email failed: ${err.message}`);
-    return { success: false, error: err.message };
+  } catch (error: any) {
+    logger.error(`Test email failed: ${error.message}`);
+    return { success: false, error: error.message };
   }
 }
 
