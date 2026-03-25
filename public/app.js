@@ -220,6 +220,18 @@ document.getElementById("bulk-activate")?.addEventListener("click", async () => 
   } catch { toast("Bulk activate failed", "error"); }
 });
 
+// ── CSV Template Download ────────────────
+document.getElementById("download-template")?.addEventListener("click", () => {
+  const template = "email,name\njohn@example.com,John Doe\njane@example.com,Jane Smith\n";
+  const blob = new Blob([template], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "subscribers_template.csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("Template downloaded");
+});
+
 // ── CSV Upload ───────────────────────────
 document.getElementById("upload-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();

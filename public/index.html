@@ -101,7 +101,11 @@
           <div class="modal-content">
             <div class="modal-header"><h3>Upload CSV</h3><button class="modal-close" data-close="upload-modal">✕</button></div>
             <div class="modal-body">
-              <p>CSV format: <code>email,name</code></p>
+              <div class="upload-template-section">
+                <p>CSV must include an <strong>email</strong> column. An optional <strong>name</strong> column is also supported.</p>
+                <button id="download-template" class="btn-secondary btn-sm" type="button">📋 Download Template</button>
+              </div>
+              <hr style="border:none;border-top:1px solid var(--border, #e2e8f0);margin:16px 0">
               <form id="upload-form">
                 <input type="file" id="csv-file" accept=".csv" required>
                 <button type="submit" class="btn-primary">Import</button>
