@@ -4,6 +4,7 @@ let currentPage = "dashboard";
 let subscriberPage = 1;
 let selectedIds = new Set();
 let emailAssets = [];
+let isSourceMode = false;
 
 const INLINE_ASSET_PATTERN = /\{\{asset:[a-z0-9-]+\}\}/gi;
 const HTML_SNIPPETS = {
@@ -325,22 +326,30 @@ async function loadEmailContent() {
   } catch { toast("Failed to load email content", "error"); }
 }
 
+function getRichEditorHtml() {
+  if (isSourceMode) return document.getElementById("email-html-source").value;
+  return document.getElementById("rich-editor").innerHTML;
+}
+
 function getCurrentEmailContent() {
   return {
     subject: document.getElementById("email-subject").value,
-    bodyHtml: document.getElementById("email-html").value,
+    bodyHtml: getRichEditorHtml(),
     bodyText: document.getElementById("email-text").value,
   };
 }
 
 function applyEmailContent(content) {
   document.getElementById("email-subject").value = content.subject || "";
-  document.getElementById("email-html").value = content.bodyHtml || "";
+  const html = content.bodyHtml || "";
+  document.getElementById("rich-editor").innerHTML = html;
+  document.getElementById("email-html-source").value = html;
   document.getElementById("email-text").value = content.bodyText || "";
-  updateDeliveryModeBanner(content.bodyHtml || "");
+  updateDeliveryModeBanner(html);
 }
 
-function updateDeliveryModeBanner(html = document.getElementById("email-html").value) {
+function updateDeliveryModeBanner(html) {
+  if (html === undefined) html = getRichEditorHtml();
   const banner = document.getElementById("delivery-mode-banner");
   banner.classList.remove("hidden");
   banner.textContent = hasInlineAssets(html)
@@ -373,7 +382,7 @@ function renderAssetList() {
 }
 
 function createInlineImageSnippet(asset) {
-  return `\n<img src="${asset.placeholder}" alt="${escapeAttribute(stripFileExtension(asset.originalName))}" style="display:block;width:100%;max-width:560px;height:auto;margin:24px 0;border:0;border-radius:18px;">\n`;
+  return `<img src="${asset.placeholder}" alt="${escapeAttribute(stripFileExtension(asset.originalName))}" style="display:block;max-width:480px;width:auto;height:auto;margin:16px 0;border:0;border-radius:12px;">`;
 }
 
 function insertInlineAsset(assetId) {
@@ -422,16 +431,23 @@ async function removeInlineAsset(assetId) {
 function insertHtmlSnippet(snippetKey) {
   const snippet = HTML_SNIPPETS[snippetKey];
   if (!snippet) return;
-  insertHtmlAtCursor(`\n${snippet}\n`);
+  insertHtmlAtCursor(snippet);
 }
 
 function insertHtmlAtCursor(snippet) {
-  const textarea = document.getElementById("email-html");
-  const start = textarea.selectionStart ?? textarea.value.length;
-  const end = textarea.selectionEnd ?? textarea.value.length;
-  textarea.setRangeText(snippet, start, end, "end");
-  textarea.focus();
-  updatePreview();
+  if (isSourceMode) {
+    // Fallback: insert into the source textarea
+    const textarea = document.getElementById("email-html-source");
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? textarea.value.length;
+    textarea.setRangeText(snippet, start, end, "end");
+    textarea.focus();
+  } else {
+    const editor = document.getElementById("rich-editor");
+    editor.focus();
+    document.execCommand("insertHTML", false, snippet);
+  }
+  onEditorInput();
 }
 
 function sanitizePreviewHtml(html) {
@@ -450,7 +466,8 @@ function resolveInlineAssetUrls(html) {
 
 function updatePreview() {
   const subject = document.getElementById("email-subject").value;
-  const html = sanitizePreviewHtml(resolveInlineAssetUrls(document.getElementById("email-html").value));
+  const rawHtml = getRichEditorHtml();
+  const html = sanitizePreviewHtml(resolveInlineAssetUrls(rawHtml));
   const previewContainer = document.getElementById("email-preview");
   const previewHtml = `<!DOCTYPE html><html><head><style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; margin: 0; color: #333; font-size: 14px; line-height: 1.6; background: #f8fafc; }
@@ -467,7 +484,7 @@ function updatePreview() {
     previewContainer.appendChild(iframe);
   }
   iframe.srcdoc = previewHtml;
-  updateDeliveryModeBanner();
+  updateDeliveryModeBanner(rawHtml);
 }
 
 function hasInlineAssets(html) {
@@ -507,11 +524,180 @@ function htmlToPlainText(html) {
 }
 
 function syncPlainTextFromHtml() {
-  document.getElementById("email-text").value = htmlToPlainText(
-    document.getElementById("email-html").value
-  );
-  toast("Plain text synced from HTML");
+  document.getElementById("email-text").value = htmlToPlainText(getRichEditorHtml());
 }
+
+// Debounced handler for editor input
+let _editorInputTimer = null;
+function onEditorInput() {
+  updatePreview();
+  clearTimeout(_editorInputTimer);
+  _editorInputTimer = setTimeout(syncPlainTextFromHtml, 400);
+}
+
+// ── Rich Text Toolbar ────────────────────
+function initRichToolbar() {
+  const toolbar = document.getElementById("rich-toolbar");
+  if (!toolbar) return;
+
+  // Command buttons
+  toolbar.querySelectorAll("button[data-cmd]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const cmd = btn.dataset.cmd;
+      const val = btn.dataset.val || null;
+
+      if (cmd === "createLink") {
+        const url = prompt("Enter URL:", "https://");
+        if (!url) return;
+        document.getElementById("rich-editor").focus();
+        document.execCommand(cmd, false, url);
+      } else if (cmd === "formatBlock" && val) {
+        document.getElementById("rich-editor").focus();
+        document.execCommand(cmd, false, `<${val}>`);
+      } else {
+        document.getElementById("rich-editor").focus();
+        document.execCommand(cmd, false, val);
+      }
+      onEditorInput();
+      updateToolbarState();
+    });
+  });
+
+  // Source toggle
+  document.getElementById("source-toggle")?.addEventListener("click", toggleSourceMode);
+
+  // Editor input
+  document.getElementById("rich-editor")?.addEventListener("input", onEditorInput);
+
+  // Track selection for active button states
+  document.addEventListener("selectionchange", () => {
+    if (!document.getElementById("rich-editor")?.contains(document.activeElement === document.getElementById("rich-editor") ? window.getSelection()?.anchorNode : null)) return;
+    updateToolbarState();
+  });
+}
+
+function updateToolbarState() {
+  const toolbar = document.getElementById("rich-toolbar");
+  if (!toolbar) return;
+  const toggleCmds = ["bold", "italic", "underline", "strikeThrough", "insertUnorderedList", "insertOrderedList"];
+  toolbar.querySelectorAll("button[data-cmd]").forEach((btn) => {
+    const cmd = btn.dataset.cmd;
+    if (toggleCmds.includes(cmd)) {
+      btn.classList.toggle("active", document.queryCommandState(cmd));
+    }
+  });
+}
+
+function toggleSourceMode() {
+  const editor = document.getElementById("rich-editor");
+  const source = document.getElementById("email-html-source");
+  const btn = document.getElementById("source-toggle");
+  if (!editor || !source) return;
+
+  isSourceMode = !isSourceMode;
+  btn?.classList.toggle("active", isSourceMode);
+
+  if (isSourceMode) {
+    // Visual → Source
+    source.value = editor.innerHTML;
+    editor.style.display = "none";
+    source.style.display = "block";
+    source.focus();
+  } else {
+    // Source → Visual
+    editor.innerHTML = source.value;
+    source.style.display = "none";
+    editor.style.display = "";
+    editor.focus();
+    onEditorInput();
+  }
+}
+
+// ── Image Resize Popover ─────────────────
+let _activeImg = null;
+let _imgPopover = null;
+
+function dismissImagePopover() {
+  if (_imgPopover) { _imgPopover.remove(); _imgPopover = null; }
+  if (_activeImg) { _activeImg.classList.remove("img-selected"); _activeImg = null; }
+}
+
+function showImagePopover(img) {
+  dismissImagePopover();
+  _activeImg = img;
+  img.classList.add("img-selected");
+
+  const pop = document.createElement("div");
+  pop.className = "img-resize-popover";
+  pop.innerHTML = `
+    <button data-w="160" title="Small (160px)">S</button>
+    <button data-w="320" title="Medium (320px)">M</button>
+    <button data-w="480" title="Large (480px)">L</button>
+    <button data-w="100%" title="Full width">Full</button>
+    <span class="pop-sep"></span>
+    <button class="pop-delete" title="Remove image">✕</button>
+  `;
+
+  // Position below the image
+  const editor = document.getElementById("rich-editor");
+  const editorRect = editor.getBoundingClientRect();
+  const imgRect = img.getBoundingClientRect();
+  pop.style.left = `${imgRect.left - editorRect.left + editor.scrollLeft}px`;
+  pop.style.top = `${imgRect.bottom - editorRect.top + editor.scrollTop + 6}px`;
+  editor.appendChild(pop);
+  _imgPopover = pop;
+
+  // Highlight current size
+  const currentW = img.style.maxWidth || img.style.width;
+  pop.querySelectorAll("button[data-w]").forEach((btn) => {
+    if (btn.dataset.w === currentW || btn.dataset.w + "px" === currentW) {
+      btn.classList.add("active");
+    }
+  });
+
+  // Size buttons
+  pop.querySelectorAll("button[data-w]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const w = btn.dataset.w;
+      if (w === "100%") {
+        img.style.maxWidth = "100%";
+        img.style.width = "100%";
+      } else {
+        img.style.maxWidth = w + "px";
+        img.style.width = "auto";
+      }
+      dismissImagePopover();
+      onEditorInput();
+    });
+  });
+
+  // Delete
+  pop.querySelector(".pop-delete")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    img.remove();
+    dismissImagePopover();
+    onEditorInput();
+  });
+}
+
+// Bind editor image clicks
+document.getElementById("rich-editor")?.addEventListener("click", (e) => {
+  if (e.target.tagName === "IMG") {
+    e.preventDefault();
+    showImagePopover(e.target);
+  } else if (!e.target.closest(".img-resize-popover")) {
+    dismissImagePopover();
+  }
+});
+
+// Dismiss on click outside editor
+document.addEventListener("click", (e) => {
+  if (_imgPopover && !e.target.closest("#rich-editor")) {
+    dismissImagePopover();
+  }
+});
 
 async function saveComposeContent(options = {}) {
   const res = await api("/email-content", {
@@ -682,7 +868,6 @@ document.getElementById("login-form")?.addEventListener("submit", async (e) => {
 });
 document.getElementById("logout-btn")?.addEventListener("click", logout);
 document.getElementById("refresh-stats")?.addEventListener("click", loadDashboard);
-document.getElementById("sync-text-btn")?.addEventListener("click", syncPlainTextFromHtml);
 document.getElementById("asset-file")?.addEventListener("change", async (e) => {
   const file = e.target.files?.[0];
   e.target.value = "";
@@ -705,7 +890,8 @@ document.getElementById("search-input")?.addEventListener("input", () => {
 });
 document.getElementById("status-filter")?.addEventListener("change", () => { subscriberPage = 1; loadSubscribers(); });
 document.getElementById("email-subject")?.addEventListener("input", updatePreview);
-document.getElementById("email-html")?.addEventListener("input", updatePreview);
+document.getElementById("email-html-source")?.addEventListener("input", onEditorInput);
+initRichToolbar();
 
 // ── Init ─────────────────────────────────
 (async () => {

@@ -194,17 +194,40 @@
                   </div>
                 </div>
                 <div class="toolbar-actions">
-                  <button id="sync-text-btn" type="button" class="btn-secondary btn-sm">🪄 Sync Text</button>
                   <button id="full-preview-btn" class="btn-secondary btn-sm">🔍 Full Preview</button>
                 </div>
               </div>
 
               <div class="form-group">
                 <div class="field-header">
-                  <label for="email-html">HTML Body</label>
-                  <span class="field-tip">Supports external URLs and inline asset placeholders.</span>
+                  <label>Email Body</label>
+                  <span class="field-tip">Format with the toolbar, or switch to Source to edit HTML directly.</span>
                 </div>
-                <textarea id="email-html" rows="14" placeholder="<p>Your email content here...</p>"></textarea>
+                <div class="rich-toolbar" id="rich-toolbar">
+                  <button type="button" data-cmd="bold" title="Bold"><b>B</b></button>
+                  <button type="button" data-cmd="italic" title="Italic"><i>I</i></button>
+                  <button type="button" data-cmd="underline" title="Underline"><u>U</u></button>
+                  <button type="button" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+                  <span class="tb-sep"></span>
+                  <button type="button" data-cmd="formatBlock" data-val="H1" title="Heading 1">H1</button>
+                  <button type="button" data-cmd="formatBlock" data-val="H2" title="Heading 2">H2</button>
+                  <button type="button" data-cmd="formatBlock" data-val="H3" title="Heading 3">H3</button>
+                  <button type="button" data-cmd="formatBlock" data-val="P" title="Paragraph">¶</button>
+                  <span class="tb-sep"></span>
+                  <button type="button" data-cmd="insertUnorderedList" title="Bullet List">•≡</button>
+                  <button type="button" data-cmd="insertOrderedList" title="Numbered List">1.</button>
+                  <span class="tb-sep"></span>
+                  <button type="button" data-cmd="createLink" title="Insert Link">🔗</button>
+                  <button type="button" data-cmd="formatBlock" data-val="BLOCKQUOTE" title="Blockquote">❝</button>
+                  <button type="button" data-cmd="insertHorizontalRule" title="Horizontal Rule">—</button>
+                  <button type="button" data-cmd="removeFormat" title="Clear Formatting">⊘</button>
+                  <span class="tb-sep"></span>
+                  <button type="button" data-cmd="undo" title="Undo">↩</button>
+                  <button type="button" data-cmd="redo" title="Redo">↪</button>
+                  <button type="button" id="source-toggle" class="tb-source" title="Toggle HTML Source">&lt;/&gt; Source</button>
+                </div>
+                <div id="rich-editor" contenteditable="true" data-placeholder="Start writing your email content here…"></div>
+                <textarea id="email-html-source" rows="14" placeholder="<p>Your email content here...</p>"></textarea>
               </div>
 
               <section class="asset-studio">
@@ -234,7 +257,7 @@
               <div class="form-group">
                 <div class="field-header">
                   <label for="email-text">Plain Text Version</label>
-                  <span class="field-tip">Use Sync Text after you update the HTML layout.</span>
+                  <span class="field-tip">Auto-synced from the editor above. Edit manually if needed.</span>
                 </div>
                 <textarea id="email-text" rows="8" placeholder="Plain text version of your email"></textarea>
               </div>
