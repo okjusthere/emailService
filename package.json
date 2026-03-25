@@ -1,0 +1,53 @@
+{
+  "name": "email-service",
+  "version": "1.0.0",
+  "description": "CAN-SPAM compliant bulk email service powered by Resend API",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "import": "tsx src/scripts/import-csv.ts",
+    "send-now": "curl -X POST http://localhost:3000/api/send-now"
+  },
+  "keywords": [
+    "resend",
+    "bulk-email",
+    "email-service",
+    "email-marketing",
+    "newsletter",
+    "can-spam",
+    "admin-dashboard",
+    "self-hosted",
+    "sqlite",
+    "typescript"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/okjusthere/emailService.git"
+  },
+  "homepage": "https://github.com/okjusthere/emailService",
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.1.0",
+    "@types/node": "^25.5.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/uuid": "^10.0.0",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.8.0",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "multer": "^2.1.1",
+    "node-cron": "^4.2.1",
+    "p-queue": "^9.1.0",
+    "resend": "^6.9.4",
+    "uuid": "^13.0.0"
+  }
+}

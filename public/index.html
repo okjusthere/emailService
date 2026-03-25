@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Email Service Admin</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Login Screen -->
+  <div id="login-screen" class="login-screen">
+    <div class="login-card">
+      <div class="login-logo">📧</div>
+      <h1>Email Service</h1>
+      <p>Enter your API secret to continue</p>
+      <form id="login-form">
+        <input type="password" id="login-secret" placeholder="API Secret" required autocomplete="off">
+        <button type="submit">Sign In</button>
+        <p id="login-error" class="error hidden"></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Main App -->
+  <div id="app" class="app hidden">
+    <!-- Sidebar -->
+    <nav class="sidebar">
+      <div class="sidebar-header">
+        <span class="logo">📧</span>
+        <h2>Email Admin</h2>
+      </div>
+      <ul class="nav-links">
+        <li><a href="#" data-page="dashboard" class="active"><span class="icon">📊</span> Dashboard</a></li>
+        <li><a href="#" data-page="subscribers"><span class="icon">👥</span> Subscribers</a></li>
+        <li><a href="#" data-page="compose"><span class="icon">✉️</span> Compose</a></li>
+        <li><a href="#" data-page="history"><span class="icon">📋</span> History</a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <button id="logout-btn" class="btn-ghost">🚪 Logout</button>
+      </div>
+    </nav>
+
+    <!-- Content -->
+    <main class="content">
+      <!-- Dashboard Page -->
+      <section id="page-dashboard" class="page">
+        <div class="page-header">
+          <h1>Dashboard</h1>
+          <button id="refresh-stats" class="btn-secondary">🔄 Refresh</button>
+        </div>
+
+        <!-- Warmup Banner -->
+        <div id="warmup-banner" class="warmup-banner hidden">
+          <span>🔥</span>
+          <span id="warmup-text"></span>
+        </div>
+
+        <div class="stats-grid" id="stats-grid">
+          <div class="stat-card blue"><div class="stat-value" id="stat-total">-</div><div class="stat-label">Total Subscribers</div></div>
+          <div class="stat-card green"><div class="stat-value" id="stat-active">-</div><div class="stat-label">Active</div></div>
+          <div class="stat-card orange"><div class="stat-value" id="stat-unsubscribed">-</div><div class="stat-label">Unsubscribed</div></div>
+          <div class="stat-card red"><div class="stat-value" id="stat-bounced">-</div><div class="stat-label">Bounced</div></div>
+          <div class="stat-card purple"><div class="stat-value" id="stat-complained">-</div><div class="stat-label">Complained</div></div>
+          <div class="stat-card teal"><div class="stat-value" id="stat-today">-</div><div class="stat-label">Sent Today</div></div>
+        </div>
+
+        <!-- Engagement Stats -->
+        <div class="card">
+          <h3>📈 Engagement</h3>
+          <div class="engagement-grid">
+            <div class="engagement-item"><span class="engagement-value" id="eng-total">0</span><span class="engagement-label">Total Sent</span></div>
+            <div class="engagement-item"><span class="engagement-value" id="eng-delivered">0</span><span class="engagement-label">Delivered</span></div>
+            <div class="engagement-item"><span class="engagement-value green" id="eng-open-rate">0%</span><span class="engagement-label">Open Rate</span></div>
+            <div class="engagement-item"><span class="engagement-value blue" id="eng-click-rate">0%</span><span class="engagement-label">Click Rate</span></div>
+            <div class="engagement-item"><span class="engagement-value red" id="eng-bounce-rate">0%</span><span class="engagement-label">Bounce Rate</span></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Recent Batches</h3>
+          <table id="recent-batches-table">
+            <thead><tr><th>Batch ID</th><th>Status</th><th>Sent</th><th>Failed</th><th>Date</th></tr></thead>
+            <tbody id="recent-batches-body"><tr><td colspan="5" class="center">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Subscribers Page -->
+      <section id="page-subscribers" class="page hidden">
+        <div class="page-header">
+          <h1>Subscribers</h1>
+          <div class="header-actions">
+            <button id="open-upload" class="btn-primary">📤 Upload CSV</button>
+            <button id="export-csv" class="btn-secondary">📥 Export</button>
+            <button id="open-add" class="btn-secondary">➕ Add</button>
+          </div>
+        </div>
+
+        <!-- Upload Modal -->
+        <div id="upload-modal" class="modal hidden">
+          <div class="modal-content">
+            <div class="modal-header"><h3>Upload CSV</h3><button class="modal-close" data-close="upload-modal">✕</button></div>
+            <div class="modal-body">
+              <p>CSV format: <code>email,name</code></p>
+              <form id="upload-form">
+                <input type="file" id="csv-file" accept=".csv" required>
+                <button type="submit" class="btn-primary">Import</button>
+              </form>
+              <div id="upload-result" class="hidden"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add Subscriber Modal -->
+        <div id="add-modal" class="modal hidden">
+          <div class="modal-content">
+            <div class="modal-header"><h3>Add Subscriber</h3><button class="modal-close" data-close="add-modal">✕</button></div>
+            <div class="modal-body">
+              <form id="add-form">
+                <input type="email" id="add-email" placeholder="Email" required>
+                <input type="text" id="add-name" placeholder="Name (optional)">
+                <button type="submit" class="btn-primary">Add</button>
+              </form>
+              <div id="add-result" class="hidden"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="filters">
+          <input type="text" id="search-input" placeholder="🔍 Search by email or name...">
+          <select id="status-filter">
+            <option value="all">All Status</option>
+            <option value="active">Active</option>
+            <option value="unsubscribed">Unsubscribed</option>
+            <option value="bounced">Bounced</option>
+            <option value="complained">Complained</option>
+          </select>
+        </div>
+
+        <!-- Bulk Actions Bar -->
+        <div id="bulk-bar" class="bulk-bar hidden">
+          <span id="selected-count">0 selected</span>
+          <button id="bulk-activate" class="btn-secondary btn-sm">✅ Activate</button>
+          <button id="bulk-delete" class="btn-danger btn-sm">🗑 Delete</button>
+        </div>
+
+        <div class="card">
+          <table id="subscribers-table">
+            <thead>
+              <tr>
+                <th><input type="checkbox" id="select-all"></th>
+                <th>Email</th><th>Name</th><th>Status</th><th>Sends</th><th>Last Sent</th><th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="subscribers-body"><tr><td colspan="7" class="center">Loading...</td></tr></tbody>
+          </table>
+          <div class="pagination" id="pagination"></div>
+        </div>
+      </section>
+
+      <!-- Compose Page -->
+      <section id="page-compose" class="page hidden">
+        <div class="page-header">
+          <h1>Compose Email</h1>
+          <div class="header-actions">
+            <button id="save-email" class="btn-secondary">💾 Save</button>
+            <button id="test-send-btn" class="btn-secondary">📧 Test Send</button>
+            <button id="send-email" class="btn-primary btn-send">🚀 Send to Next Batch</button>
+          </div>
+        </div>
+        <div class="compose-layout">
+          <div class="compose-editor">
+            <div class="form-group">
+              <label for="email-subject">Subject</label>
+              <input type="text" id="email-subject" placeholder="Email subject line">
+            </div>
+            <div class="form-group">
+              <label for="email-html">HTML Body</label>
+              <textarea id="email-html" rows="14" placeholder="<p>Your email content here...</p>"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="email-text">Plain Text Version</label>
+              <textarea id="email-text" rows="8" placeholder="Plain text version of your email"></textarea>
+            </div>
+          </div>
+          <div class="compose-preview">
+            <div class="preview-header">
+              <h3>Preview</h3>
+              <button id="full-preview-btn" class="btn-secondary btn-sm">🔍 Full Preview</button>
+            </div>
+            <div class="email-preview-frame" id="email-preview"></div>
+          </div>
+        </div>
+
+        <!-- Test Send Modal -->
+        <div id="test-modal" class="modal hidden">
+          <div class="modal-content">
+            <div class="modal-header"><h3>📧 Test Send</h3><button class="modal-close" data-close="test-modal">✕</button></div>
+            <div class="modal-body">
+              <p>Send a test email to preview how it looks in your inbox. Subject will be prefixed with [TEST].</p>
+              <form id="test-form">
+                <input type="email" id="test-email" placeholder="Your email address" required>
+                <button type="submit" class="btn-primary">Send Test</button>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- Send Confirmation Modal -->
+        <div id="send-modal" class="modal hidden">
+          <div class="modal-content">
+            <div class="modal-header"><h3>⚠️ Confirm Send</h3><button class="modal-close" data-close="send-modal">✕</button></div>
+            <div class="modal-body">
+              <p>This will send the email to the next batch of subscribers. Are you sure?</p>
+              <div class="modal-actions">
+                <button id="confirm-send" class="btn-primary btn-send">🚀 Yes, Send Now</button>
+                <button class="btn-secondary" data-close="send-modal">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- History Page -->
+      <section id="page-history" class="page hidden">
+        <div class="page-header">
+          <h1>Send History</h1>
+        </div>
+        <div class="card">
+          <table id="history-table">
+            <thead><tr><th>Batch ID</th><th>Total</th><th>Sent</th><th>Failed</th><th>Status</th><th>Started</th><th>Completed</th></tr></thead>
+            <tbody id="history-body"><tr><td colspan="7" class="center">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
