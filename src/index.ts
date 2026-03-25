@@ -11,6 +11,13 @@ import { logger } from "./utils/logger.js";
 
 const app = express();
 
+function formatError(err: unknown): unknown {
+  if (err instanceof Error) {
+    return { message: err.message, stack: err.stack };
+  }
+  return err;
+}
+
 // Parse JSON bodies (for webhooks + API)
 app.use(express.json());
 // Parse URL-encoded bodies (for unsubscribe form)
@@ -36,22 +43,38 @@ app.get("/", (_req, res) => {
 
 // ── Bootstrap ──────────────────────────────────────
 function bootstrap(): void {
-  // 1. Initialize database
-  getDb();
-  runMigrations();
+  try {
+    logger.info("Bootstrap start");
+    logger.info("Initializing database");
+    getDb();
 
-  // 2. Start scheduler
-  startScheduler();
+    logger.info("Running migrations");
+    runMigrations();
 
-  // 3. Start Express server
-  app.listen(config.port, () => {
-    logger.success(`Email Service running on port ${config.port}`);
-    logger.info(`  Admin:       http://localhost:${config.port}/admin`);
-    logger.info(`  Health:      http://localhost:${config.port}/health`);
-    logger.info(`  Webhook:     http://localhost:${config.port}/webhook/resend`);
-    logger.info(`  Unsubscribe: http://localhost:${config.port}/unsubscribe?token=xxx`);
-    logger.info(`  Cron:        ${config.sendCron}`);
-  });
+    logger.info("Starting scheduler");
+    startScheduler();
+
+    logger.info("Starting HTTP server");
+    app.listen(config.port, () => {
+      logger.success(`Email Service running on port ${config.port}`);
+      logger.info(`  Admin:       http://localhost:${config.port}/admin`);
+      logger.info(`  Health:      http://localhost:${config.port}/health`);
+      logger.info(`  Webhook:     http://localhost:${config.port}/webhook/resend`);
+      logger.info(`  Unsubscribe: http://localhost:${config.port}/unsubscribe?token=xxx`);
+      logger.info(`  Cron:        ${config.sendCron}`);
+    });
+  } catch (err) {
+    logger.error("Bootstrap failed", formatError(err));
+    process.exit(1);
+  }
 }
+
+process.on("uncaughtException", (err) => {
+  logger.error("Uncaught exception", formatError(err));
+});
+
+process.on("unhandledRejection", (reason) => {
+  logger.error("Unhandled rejection", formatError(reason));
+});
 
 bootstrap();

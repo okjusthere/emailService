@@ -18,7 +18,19 @@ import {
 } from "../utils/compliance.js";
 import { logger } from "../utils/logger.js";
 
-const resend = new Resend(config.resendApiKey);
+let resendClient: Resend | null = null;
+
+function getResendClient(): Resend {
+  if (!config.resendApiKey) {
+    throw new Error("RESEND_API_KEY is not configured");
+  }
+
+  if (!resendClient) {
+    resendClient = new Resend(config.resendApiKey);
+  }
+
+  return resendClient;
+}
 
 interface EmailContent {
   subject: string;
@@ -73,6 +85,7 @@ async function sendBatch(
   });
 
   try {
+    const resend = getResendClient();
     const result = await resend.batch.send(emails);
 
     // Record send logs
@@ -216,6 +229,7 @@ export async function sendTestEmail(
   });
 
   try {
+    const resend = getResendClient();
     await resend.emails.send({
       from: `${config.fromName} <${config.fromEmail}>`,
       to: [testEmail],
@@ -236,4 +250,3 @@ export async function sendTestEmail(
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
