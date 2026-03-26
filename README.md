@@ -50,6 +50,8 @@ This project is intentionally not a full SMTP platform. It focuses on the operat
 
 Mount `data/` on a persistent volume in production.
 
+You can relocate runtime storage with `DATA_DIR`, `DATABASE_PATH`, and `BACKUP_DIR`.
+
 ## Quick Start
 
 ```bash
@@ -73,6 +75,8 @@ FROM_NAME=Your Company
 REPLY_TO_EMAIL=hello@yourdomain.com
 API_SECRET=your-admin-secret
 BASE_URL=https://your-domain.com
+DATA_DIR=./data
+BACKUP_DIR=./backups
 COMPANY_NAME=Your Company Inc.
 COMPANY_ADDRESS=123 Main St, City, State ZIP
 
@@ -99,6 +103,32 @@ Notes:
 - `SUBSCRIBE_ALLOWED_ORIGINS` should list every origin allowed to host your embedded subscribe form. If omitted, it defaults to `BASE_URL`'s origin.
 - In production, `RESEND_WEBHOOK_SECRET` should always be set.
 - `API_SECRET` is still accepted on `x-api-secret` for scripted admin API access, but the browser admin uses a session cookie after login.
+- `DATABASE_PATH` overrides the SQLite file directly; otherwise it lives under `DATA_DIR`.
+
+## Verification
+
+```bash
+npm run check
+npm test
+```
+
+`npm run check` runs the production build plus a frontend syntax check. `npm test` runs a small integration test suite against a temporary SQLite database.
+
+## Backups
+
+Create a timestamped backup with:
+
+```bash
+npm run backup
+```
+
+The backup script:
+
+- creates a consistent SQLite snapshot via `VACUUM INTO`
+- copies uploaded email assets and their manifest
+- writes backup metadata to `metadata.json`
+
+Restoring is intentionally manual: stop the app, replace the database and asset files from a chosen backup, then restart the service.
 
 ## Public Endpoints
 
@@ -134,6 +164,12 @@ Recommended production checks:
 - verify `/admin`
 - configure the Resend webhook endpoint as `https://your-domain.com/webhook/resend`
 - confirm `SUBSCRIBE_ALLOWED_ORIGINS` matches every site embedding the subscribe form
+- schedule regular `npm run backup` execution against persistent storage
+
+## Project Hygiene
+
+- CI runs `npm run check` and `npm test` on pushes and pull requests.
+- Contributor workflow is documented in [CONTRIBUTING.md](/Users/weizhengle/Downloads/vibecoding/Email%20Service/CONTRIBUTING.md).
 
 ## Current Positioning
 

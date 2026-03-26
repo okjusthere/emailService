@@ -103,6 +103,25 @@ export function runMigrations(): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_jobs_status_run ON jobs(status, run_after);
+
+    CREATE TABLE IF NOT EXISTS admin_sessions (
+      token TEXT PRIMARY KEY,
+      expires_at DATETIME NOT NULL,
+      last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires ON admin_sessions(expires_at);
+
+    CREATE TABLE IF NOT EXISTS rate_limit_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scope TEXT NOT NULL,
+      key TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_rate_limit_scope_key_created
+      ON rate_limit_events(scope, key, created_at);
   `);
 
   // Add campaign_id to send_logs if not present

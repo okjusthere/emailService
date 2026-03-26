@@ -2,8 +2,9 @@ import { randomUUID } from "crypto";
 import fs from "fs";
 import path from "path";
 import type { Attachment } from "resend";
+import { config } from "../config.js";
 
-const DATA_DIR = path.join(process.cwd(), "data");
+const DATA_DIR = config.dataDir;
 const ASSET_DIR = path.join(DATA_DIR, "email-assets");
 const ASSET_MANIFEST_PATH = path.join(DATA_DIR, "email_assets.json");
 

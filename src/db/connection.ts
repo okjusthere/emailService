@@ -1,23 +1,23 @@
 import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
+import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
 
-const DB_PATH = path.join(process.cwd(), "data", "email_service.db");
-
-let db: Database.Database;
+let db: Database.Database | undefined;
 
 export function getDb(): Database.Database {
   if (!db) {
-    const dir = path.dirname(DB_PATH);
+    const dbPath = config.databasePath;
+    const dir = path.dirname(dbPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    db = new Database(DB_PATH);
+    db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = ON");
-    logger.info(`Database connected: ${DB_PATH}`);
+    logger.info(`Database connected: ${dbPath}`);
   }
   return db;
 }
@@ -25,6 +25,11 @@ export function getDb(): Database.Database {
 export function closeDb(): void {
   if (db) {
     db.close();
+    db = undefined;
     logger.info("Database connection closed");
   }
+}
+
+export function getDatabasePath(): string {
+  return config.databasePath;
 }

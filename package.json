@@ -7,8 +7,9 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "build": "tsc",
-    "import": "tsx src/scripts/import-csv.ts",
-    "send-now": "curl -X POST http://localhost:3000/api/send-now"
+    "check": "npm run build && node --check public/app.js",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "backup": "npm run build && node dist/scripts/backup-data.js"
   },
   "keywords": [
     "resend",

@@ -1,9 +1,13 @@
 import crypto from "crypto";
 import type { NextFunction, Request, Response } from "express";
 import { config } from "../config.js";
+import {
+  createAdminSessionRecord,
+  deleteAdminSessionToken,
+  hasValidAdminSessionToken,
+} from "../services/runtimeStateService.js";
 
 const ADMIN_SESSION_COOKIE = "email_admin_session";
-const adminSessions = new Map<string, number>();
 
 interface CookieOptions {
   httpOnly?: boolean;
@@ -11,14 +15,6 @@ interface CookieOptions {
   path?: string;
   sameSite?: "Lax" | "Strict" | "None";
   secure?: boolean;
-}
-
-function pruneExpiredSessions(now = Date.now()): void {
-  for (const [token, expiresAt] of adminSessions.entries()) {
-    if (expiresAt <= now) {
-      adminSessions.delete(token);
-    }
-  }
 }
 
 function parseCookies(cookieHeader: string | undefined): Record<string, string> {
@@ -97,11 +93,8 @@ export function isValidApiSecret(secret: string): boolean {
 }
 
 export function createAdminSession(res: Response): void {
-  const token = crypto.randomBytes(32).toString("base64url");
   const ttlMs = config.adminSessionTtlHours * 60 * 60 * 1000;
-  const expiresAt = Date.now() + ttlMs;
-  adminSessions.set(token, expiresAt);
-  pruneExpiredSessions();
+  const { token } = createAdminSessionRecord(config.adminSessionTtlHours);
 
   res.setHeader("Cache-Control", "no-store");
   res.append(
@@ -119,7 +112,7 @@ export function createAdminSession(res: Response): void {
 export function clearAdminSession(req: Request, res: Response): void {
   const token = getSessionToken(req);
   if (token) {
-    adminSessions.delete(token);
+    deleteAdminSessionToken(token);
   }
 
   res.setHeader("Cache-Control", "no-store");
@@ -136,19 +129,12 @@ export function clearAdminSession(req: Request, res: Response): void {
 }
 
 function hasValidAdminSession(req: Request): boolean {
-  pruneExpiredSessions();
   const token = getSessionToken(req);
   if (!token) {
     return false;
   }
 
-  const expiresAt = adminSessions.get(token);
-  if (!expiresAt || expiresAt <= Date.now()) {
-    adminSessions.delete(token);
-    return false;
-  }
-
-  return true;
+  return hasValidAdminSessionToken(token);
 }
 
 /**

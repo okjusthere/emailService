@@ -1,17 +1,18 @@
 import express from "express";
 import path from "path";
+import { fileURLToPath } from "url";
 import { config } from "./config.js";
-import { getDb } from "./db/connection.js";
+import { getDatabasePath, getDb } from "./db/connection.js";
 import { runMigrations } from "./db/schema.js";
-import { startWorker } from "./services/scheduler.js";
+import { isWorkerRunning, startWorker } from "./services/scheduler.js";
 import webhookRoutes from "./routes/webhook.js";
 import unsubscribeRoutes from "./routes/unsubscribe.js";
 import adminRoutes from "./routes/admin.js";
 import subscribeRoutes from "./routes/subscribe.js";
+import { pruneExpiredAdminSessions } from "./services/runtimeStateService.js";
 import { logger } from "./utils/logger.js";
 
-const app = express();
-const subscribeAllowedOrigins = new Set(config.subscribeAllowedOrigins);
+const currentFile = fileURLToPath(import.meta.url);
 
 function formatError(err: unknown): unknown {
   if (err instanceof Error) {
@@ -20,63 +21,68 @@ function formatError(err: unknown): unknown {
   return err;
 }
 
-app.use("/webhook", express.raw({ type: "application/json" }), webhookRoutes);
+export function createApp(): express.Express {
+  const app = express();
+  const subscribeAllowedOrigins = new Set(config.subscribeAllowedOrigins);
 
-// Parse JSON bodies (for API)
-app.use(express.json());
-// Parse URL-encoded bodies (for unsubscribe form)
-app.use(express.urlencoded({ extended: true }));
+  app.use("/webhook", express.raw({ type: "application/json" }), webhookRoutes);
 
-// Serve admin dashboard static files
-app.use("/admin", express.static(path.join(process.cwd(), "public")));
-app.use(
-  "/email-assets",
-  express.static(path.join(process.cwd(), "data", "email-assets"))
-);
+  // Parse JSON bodies (for API)
+  app.use(express.json());
+  // Parse URL-encoded bodies (for unsubscribe form)
+  app.use(express.urlencoded({ extended: true }));
 
-// Routes
-app.use("/unsubscribe", unsubscribeRoutes);
-app.use("/api/admin", adminRoutes);
+  // Serve admin dashboard static files
+  app.use("/admin", express.static(path.join(process.cwd(), "public")));
+  app.use(
+    "/email-assets",
+    express.static(path.join(config.dataDir, "email-assets"))
+  );
 
-// CORS for public subscribe API (needed for embed forms on other domains)
-app.use("/api/subscribe", (_req, res, next) => {
-  const origin = _req.get("origin");
-  const isAllowedOrigin = !origin || subscribeAllowedOrigins.has(origin);
+  // Routes
+  app.use("/unsubscribe", unsubscribeRoutes);
+  app.use("/api/admin", adminRoutes);
 
-  if (origin && isAllowedOrigin) {
-    res.header("Access-Control-Allow-Origin", origin);
-    res.header("Vary", "Origin");
-  }
+  // CORS for public subscribe API (needed for embed forms on other domains)
+  app.use("/api/subscribe", (_req, res, next) => {
+    const origin = _req.get("origin");
+    const isAllowedOrigin = !origin || subscribeAllowedOrigins.has(origin);
 
-  res.header("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type");
+    if (origin && isAllowedOrigin) {
+      res.header("Access-Control-Allow-Origin", origin);
+      res.header("Vary", "Origin");
+    }
 
-  if (_req.method === "OPTIONS") {
-    if (!isAllowedOrigin) {
-      res.sendStatus(403);
+    res.header("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+
+    if (_req.method === "OPTIONS") {
+      if (!isAllowedOrigin) {
+        res.sendStatus(403);
+        return;
+      }
+
+      res.sendStatus(204);
       return;
     }
 
-    res.sendStatus(204);
-    return;
-  }
+    if (!isAllowedOrigin) {
+      res.status(403).json({ error: "Origin not allowed" });
+      return;
+    }
 
-  if (!isAllowedOrigin) {
-    res.status(403).json({ error: "Origin not allowed" });
-    return;
-  }
+    next();
+  });
+  app.use("/api/subscribe", subscribeRoutes);
 
-  next();
-});
-app.use("/api/subscribe", subscribeRoutes);
-// Standalone subscribe page (public)
-app.get("/subscribe", (_req, res) => {
-  res.sendFile(path.join(process.cwd(), "public", "subscribe.html"));
-});
+  // Standalone subscribe page (public)
+  app.get("/subscribe", (_req, res) => {
+    res.sendFile(path.join(process.cwd(), "public", "subscribe.html"));
+  });
 
-// Embed snippet generator (for admin to copy-paste into other sites)
-app.get("/api/subscribe/embed", (_req, res) => {
-  const embedCode = `<!-- Email Subscribe Form -->
+  // Embed snippet generator (for admin to copy-paste into other sites)
+  app.get("/api/subscribe/embed", (_req, res) => {
+    const embedCode = `<!-- Email Subscribe Form -->
 <form id="email-subscribe-form" style="max-width:400px;font-family:sans-serif;">
   <input type="email" name="email" placeholder="Your email" required
     style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:6px;font-size:15px;margin-bottom:8px;">
@@ -99,21 +105,34 @@ document.getElementById("email-subscribe-form").addEventListener("submit",async 
     if(r.ok)e.target.reset();}catch{msg.textContent="Error. Please try again.";msg.style.color="#dc2626";}
 });
 </script>`;
-  res.json({ embedCode });
-});
+    res.json({ embedCode });
+  });
 
-// Health check (public)
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
-});
+  // Health check (public)
+  app.get("/health", (_req, res) => {
+    res.json({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      database: {
+        path: getDatabasePath(),
+      },
+      worker: {
+        running: isWorkerRunning(),
+      },
+    });
+  });
 
-// Redirect root to admin
-app.get("/", (_req, res) => {
-  res.redirect("/admin");
-});
+  // Redirect root to admin
+  app.get("/", (_req, res) => {
+    res.redirect("/admin");
+  });
 
-// ── Bootstrap ──────────────────────────────────────
-function bootstrap(): void {
+  return app;
+}
+
+export const app = createApp();
+
+export function bootstrap(): void {
   try {
     logger.info("Bootstrap start");
     logger.info("Initializing database");
@@ -121,6 +140,7 @@ function bootstrap(): void {
 
     logger.info("Running migrations");
     runMigrations();
+    pruneExpiredAdminSessions();
 
     logger.info("Starting job worker");
     startWorker();
@@ -147,4 +167,6 @@ process.on("unhandledRejection", (reason) => {
   logger.error("Unhandled rejection", formatError(reason));
 });
 
-bootstrap();
+if (process.argv[1] && path.resolve(process.argv[1]) === currentFile) {
+  bootstrap();
+}

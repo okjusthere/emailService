@@ -2,12 +2,11 @@ import { Router, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
 import { getDb } from "../db/connection.js";
 import { config } from "../config.js";
+import { registerRateLimitAttempt } from "../services/runtimeStateService.js";
 import { logger } from "../utils/logger.js";
 
 const router = Router();
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const subscribeAttemptsByIp = new Map<string, number[]>();
-const subscribeAttemptsByEmail = new Map<string, number[]>();
 
 function getRequestIp(req: Request): string {
   const forwarded = req.headers["x-forwarded-for"];
@@ -24,20 +23,6 @@ function normalizeEmail(value: string): string {
 
 function isValidEmail(value: string): boolean {
   return EMAIL_PATTERN.test(value);
-}
-
-function registerAttempt(
-  store: Map<string, number[]>,
-  key: string,
-  now: number,
-  windowMs: number,
-  max: number
-): boolean {
-  const attempts = (store.get(key) || []).filter((value) => now - value < windowMs);
-  attempts.push(now);
-  store.set(key, attempts);
-
-  return attempts.length <= max;
 }
 
 function canSendAnotherConfirmation(
@@ -87,27 +72,28 @@ router.post("/", async (req: Request, res: Response) => {
 
   const db = getDb();
   const normalizedEmail = normalizeEmail(email);
-  const now = Date.now();
   const windowMs = config.subscribeRateWindowMinutes * 60 * 1000;
   const ip = getRequestIp(req);
+  const ipLimit = registerRateLimitAttempt(
+    "subscribe-ip",
+    ip,
+    windowMs,
+    config.subscribeIpWindowMax
+  );
+  const emailLimit = registerRateLimitAttempt(
+    "subscribe-email",
+    normalizedEmail,
+    windowMs,
+    config.subscribeEmailWindowMax
+  );
 
-  if (
-    !registerAttempt(
-      subscribeAttemptsByIp,
-      ip,
-      now,
-      windowMs,
-      config.subscribeIpWindowMax
-    ) ||
-    !registerAttempt(
-      subscribeAttemptsByEmail,
-      normalizedEmail,
-      now,
-      windowMs,
-      config.subscribeEmailWindowMax
-    )
-  ) {
+  if (!ipLimit.allowed || !emailLimit.allowed) {
+    const retryAfterSeconds = Math.max(
+      ipLimit.retryAfterSeconds,
+      emailLimit.retryAfterSeconds
+    );
     logger.warn(`Subscribe rate limited for ${normalizedEmail} from ${ip}`);
+    res.setHeader("Retry-After", String(retryAfterSeconds));
     res
       .status(429)
       .json({ error: "Too many subscription attempts. Please try again later." });

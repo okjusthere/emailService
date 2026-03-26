@@ -1,3 +1,4 @@
+import path from "path";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -27,6 +28,8 @@ function parseOrigins(value: string | undefined, fallbackOrigin: string): string
   );
 }
 
+const defaultDataDir = path.join(process.cwd(), "data");
+
 export const config = {
   // Resend
   resendApiKey: process.env.RESEND_API_KEY || "",
@@ -42,6 +45,11 @@ export const config = {
   nodeEnv: process.env.NODE_ENV || "development",
   port: parseIntEnv(process.env.PORT, 3000),
   baseUrl: process.env.BASE_URL || "http://localhost:3000",
+  dataDir: process.env.DATA_DIR || defaultDataDir,
+  databasePath:
+    process.env.DATABASE_PATH ||
+    path.join(process.env.DATA_DIR || defaultDataDir, "email_service.db"),
+  backupDir: process.env.BACKUP_DIR || path.join(process.cwd(), "backups"),
 
   // Sending
   dailySendCount: parseIntEnv(process.env.DAILY_SEND_COUNT, 5000),

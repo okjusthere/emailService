@@ -178,3 +178,7 @@ export function stopWorker(): void {
     logger.info("Job worker stopped");
   }
 }
+
+export function isWorkerRunning(): boolean {
+  return workerInterval !== null;
+}
