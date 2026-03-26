@@ -5,7 +5,7 @@ import { requireAuth } from "../utils/auth.js";
 import { config } from "../config.js";
 import { getStats, addSubscriber, bulkImport } from "../services/subscriberService.js";
 import { triggerManualSend } from "../services/scheduler.js";
-import { sendTestEmail } from "../services/emailSender.js";
+import { sendTestEmail, executeDailySend } from "../services/emailSender.js";
 import { getEffectiveDailyLimit } from "../utils/warmup.js";
 import { buildRecruitmentEmail } from "../templates/recruitmentEmail.js";
 import { getDb } from "../db/connection.js";
@@ -25,6 +25,25 @@ import {
   saveEmailContent,
   type EmailContent,
 } from "../services/emailContentService.js";
+import {
+  listCampaigns,
+  getCampaign,
+  createCampaign,
+  updateCampaign,
+  deleteCampaign,
+  duplicateCampaign,
+  markCampaignSending,
+  markCampaignSent,
+  getCampaignStats,
+} from "../services/campaignService.js";
+import {
+  listTags,
+  createTag,
+  deleteTag,
+  tagSubscribers,
+  untagSubscribers,
+  getSubscriberTags,
+} from "../services/tagService.js";
 
 const router = Router();
 
@@ -50,6 +69,11 @@ function getRequestBaseUrl(req: Request): string {
   return host ? `${proto}://${host}` : config.baseUrl;
 }
 
+function paramId(req: Request): string {
+  const id = req.params.id;
+  return Array.isArray(id) ? id[0] : id;
+}
+
 function buildEmailContentResponse(content: EmailContent) {
   return {
     ...content,
@@ -72,6 +96,7 @@ function buildPreviewEmail(content: EmailContent, baseUrl: string): string {
   });
 }
 
+// ── Dashboard Stats ──────────────────────────────
 router.get("/stats", (_req: Request, res: Response) => {
   const db = getDb();
   const subscriberStats = getStats();
@@ -100,11 +125,13 @@ router.get("/stats", (_req: Request, res: Response) => {
     .get() as any;
 
   const warmup = getEffectiveDailyLimit();
+  const campaignCount = (db.prepare("SELECT COUNT(*) as c FROM campaigns").get() as any).c;
 
   res.json({
     subscribers: subscriberStats,
     recentBatches,
     todaySentCount: todaySent.count,
+    campaignCount,
     engagement: {
       totalSent: engagement.total_sent || 0,
       delivered: engagement.delivered || 0,
@@ -130,41 +157,249 @@ router.get("/stats", (_req: Request, res: Response) => {
   });
 });
 
+// ── Campaigns ────────────────────────────────────
+router.get("/campaigns", (_req: Request, res: Response) => {
+  const campaigns = listCampaigns().map((c) => ({
+    ...c,
+    stats: getCampaignStats(c.id),
+  }));
+  res.json({ campaigns });
+});
+
+router.post("/campaigns", (req: Request, res: Response) => {
+  const { name } = req.body;
+  if (!name) {
+    res.status(400).json({ error: "name is required" });
+    return;
+  }
+  const campaign = createCampaign(req.body);
+  res.json({ success: true, campaign });
+});
+
+router.get("/campaigns/:id", (req: Request, res: Response) => {
+  const campaign = getCampaign(paramId(req));
+  if (!campaign) {
+    res.status(404).json({ error: "Campaign not found" });
+    return;
+  }
+  res.json({ campaign, stats: getCampaignStats(campaign.id) });
+});
+
+router.put("/campaigns/:id", (req: Request, res: Response) => {
+  const campaign = updateCampaign(paramId(req), req.body);
+  if (!campaign) {
+    res.status(404).json({ error: "Campaign not found or already sent" });
+    return;
+  }
+  res.json({ success: true, campaign });
+});
+
+router.delete("/campaigns/:id", (req: Request, res: Response) => {
+  if (deleteCampaign(paramId(req))) {
+    res.json({ success: true });
+    return;
+  }
+  res.status(404).json({ error: "Campaign not found" });
+});
+
+router.post("/campaigns/:id/duplicate", (req: Request, res: Response) => {
+  const campaign = duplicateCampaign(paramId(req));
+  if (!campaign) {
+    res.status(404).json({ error: "Campaign not found" });
+    return;
+  }
+  res.json({ success: true, campaign });
+});
+
+router.get("/campaigns/:id/stats", (req: Request, res: Response) => {
+  const campaign = getCampaign(paramId(req));
+  if (!campaign) {
+    res.status(404).json({ error: "Campaign not found" });
+    return;
+  }
+  res.json({ campaign, stats: getCampaignStats(campaign.id) });
+});
+
+router.post("/campaigns/:id/test-send", async (req: Request, res: Response) => {
+  const { email } = req.body;
+  if (!email) {
+    res.status(400).json({ error: "email is required" });
+    return;
+  }
+  const campaign = getCampaign(paramId(req));
+  if (!campaign) {
+    res.status(404).json({ error: "Campaign not found" });
+    return;
+  }
+  const content: EmailContent = {
+    subject: campaign.subject,
+    bodyHtml: campaign.body_html,
+    bodyText: campaign.body_text,
+  };
+  const result = await sendTestEmail(email, content);
+  if (result.success) {
+    res.json({ success: true, message: `Test email sent to ${email}` });
+    return;
+  }
+  res.status(500).json({ error: result.error });
+});
+
+router.post("/campaigns/:id/send", async (req: Request, res: Response) => {
+  const campaign = getCampaign(paramId(req));
+  if (!campaign) {
+    res.status(404).json({ error: "Campaign not found" });
+    return;
+  }
+  if (campaign.status === "sending") {
+    res.status(409).json({ error: "Campaign is already sending" });
+    return;
+  }
+  if (!campaign.subject || !campaign.body_html) {
+    res.status(400).json({ error: "Campaign must have a subject and body" });
+    return;
+  }
+
+  const content: EmailContent = {
+    subject: campaign.subject,
+    bodyHtml: campaign.body_html,
+    bodyText: campaign.body_text,
+  };
+
+  // Parse tag filter
+  let tagIds: number[] | undefined;
+  if (campaign.tag_filter) {
+    tagIds = campaign.tag_filter.split(",").map(Number).filter(Boolean);
+    if (tagIds.length === 0) tagIds = undefined;
+  }
+
+  try {
+    markCampaignSending(campaign.id);
+    const result = await executeDailySend(content, campaign.id, tagIds);
+    markCampaignSent(campaign.id, result.totalSent, result.totalFailed);
+    res.json({
+      success: true,
+      batchId: result.batchId,
+      sent: result.totalSent,
+      failed: result.totalFailed,
+    });
+  } catch (error: any) {
+    markCampaignSent(campaign.id, 0, 0);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post("/campaigns/:id/preview", (req: Request, res: Response) => {
+  const campaign = getCampaign(paramId(req));
+  if (!campaign) {
+    res.status(404).json({ error: "Campaign not found" });
+    return;
+  }
+  const content: EmailContent = {
+    subject: campaign.subject,
+    bodyHtml: campaign.body_html,
+    bodyText: campaign.body_text,
+  };
+  res.send(buildPreviewEmail(content, getRequestBaseUrl(req)));
+});
+
+// ── Tags ─────────────────────────────────────────
+router.get("/tags", (_req: Request, res: Response) => {
+  res.json({ tags: listTags() });
+});
+
+router.post("/tags", (req: Request, res: Response) => {
+  const { name, color } = req.body;
+  if (!name) {
+    res.status(400).json({ error: "name is required" });
+    return;
+  }
+  const tag = createTag(name, color);
+  if (!tag) {
+    res.status(409).json({ error: "Tag already exists" });
+    return;
+  }
+  res.json({ success: true, tag });
+});
+
+router.delete("/tags/:id", (req: Request, res: Response) => {
+  if (deleteTag(parseInt(paramId(req)))) {
+    res.json({ success: true });
+    return;
+  }
+  res.status(404).json({ error: "Tag not found" });
+});
+
+router.post("/subscribers/tag", (req: Request, res: Response) => {
+  const { ids, tagId } = req.body;
+  if (!Array.isArray(ids) || !tagId) {
+    res.status(400).json({ error: "ids and tagId are required" });
+    return;
+  }
+  const count = tagSubscribers(ids, tagId);
+  res.json({ success: true, tagged: count });
+});
+
+router.post("/subscribers/untag", (req: Request, res: Response) => {
+  const { ids, tagId } = req.body;
+  if (!Array.isArray(ids) || !tagId) {
+    res.status(400).json({ error: "ids and tagId are required" });
+    return;
+  }
+  const count = untagSubscribers(ids, tagId);
+  res.json({ success: true, untagged: count });
+});
+
+// ── Subscribers ──────────────────────────────────
 router.get("/subscribers", (req: Request, res: Response) => {
   const db = getDb();
   const page = parseInt(req.query.page as string) || 1;
   const limit = parseInt(req.query.limit as string) || 50;
   const status = req.query.status as string;
   const search = req.query.search as string;
+  const tagId = req.query.tagId as string;
   const offset = (page - 1) * limit;
 
   let where = "1=1";
   const params: any[] = [];
+  let join = "";
 
   if (status && status !== "all") {
-    where += " AND status = ?";
+    where += " AND s.status = ?";
     params.push(status);
   }
 
   if (search) {
-    where += " AND (email LIKE ? OR name LIKE ?)";
+    where += " AND (s.email LIKE ? OR s.name LIKE ?)";
     params.push(`%${search}%`, `%${search}%`);
   }
 
+  if (tagId) {
+    join = "JOIN subscriber_tags st ON st.subscriber_id = s.id";
+    where += " AND st.tag_id = ?";
+    params.push(parseInt(tagId));
+  }
+
   const total = db
-    .prepare(`SELECT COUNT(*) as count FROM subscribers WHERE ${where}`)
+    .prepare(`SELECT COUNT(DISTINCT s.id) as count FROM subscribers s ${join} WHERE ${where}`)
     .get(...params) as { count: number };
 
   const subscribers = db
     .prepare(
-      `SELECT id, email, name, status, send_count, last_sent_at, created_at
-       FROM subscribers WHERE ${where}
-       ORDER BY created_at DESC LIMIT ? OFFSET ?`
+      `SELECT DISTINCT s.id, s.email, s.name, s.status, s.send_count, s.last_sent_at, s.created_at
+       FROM subscribers s ${join}
+       WHERE ${where}
+       ORDER BY s.created_at DESC LIMIT ? OFFSET ?`
     )
-    .all(...params, limit, offset);
+    .all(...params, limit, offset) as any[];
+
+  // Attach tags to each subscriber
+  const subscribersWithTags = subscribers.map((sub) => ({
+    ...sub,
+    tags: getSubscriberTags(sub.id),
+  }));
 
   res.json({
-    subscribers,
+    subscribers: subscribersWithTags,
     pagination: {
       page,
       limit,
@@ -347,6 +582,7 @@ router.post(
   }
 );
 
+// ── Email Assets ─────────────────────────────────
 router.get("/email-assets", (req: Request, res: Response) => {
   res.json({ assets: listEmailAssets(getRequestBaseUrl(req)) });
 });
@@ -396,6 +632,7 @@ router.delete("/email-assets/:id", (req: Request, res: Response) => {
   res.json({ success: true });
 });
 
+// ── Legacy email content (backward compat) ───────
 router.get("/email-content", (_req: Request, res: Response) => {
   res.json(buildEmailContentResponse(getEmailContent()));
 });
@@ -489,3 +726,4 @@ router.get("/me", (_req: Request, res: Response) => {
 });
 
 export default router;
+

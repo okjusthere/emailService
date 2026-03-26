@@ -1,8 +1,18 @@
 import { config } from "../config.js";
 
 /**
- * Generate the HTML email body with CAN-SPAM compliant footer.
- * This template is for recruitment purposes.
+ * Email template mode:
+ * - "personal": Minimal HTML, looks like a 1-on-1 email → lands in Primary inbox
+ * - "branded": Styled newsletter with header/footer → likely lands in Promotions
+ */
+type TemplateMode = "personal" | "branded";
+
+const TEMPLATE_MODE: TemplateMode = (process.env.EMAIL_TEMPLATE_MODE as TemplateMode) || "personal";
+
+/**
+ * Generate HTML email body.
+ * "personal" mode uses minimal HTML to mimic a real human-sent email.
+ * "branded" mode uses a styled newsletter layout.
  */
 export function buildRecruitmentEmail(params: {
   recipientName?: string;
@@ -13,13 +23,50 @@ export function buildRecruitmentEmail(params: {
   const { recipientName, bodyHtml, unsubscribeUrl } = params;
   const greeting = recipientName ? `Hi ${recipientName},` : "Hi,";
 
-  return `
-<!DOCTYPE html>
+  if (TEMPLATE_MODE === "personal") {
+    return buildPersonalEmail(greeting, bodyHtml, unsubscribeUrl);
+  }
+  return buildBrandedEmail(greeting, params.subject, bodyHtml, unsubscribeUrl);
+}
+
+/**
+ * Personal mode: Minimal HTML that looks like a real email from a person.
+ * Gmail key signals for Primary: simple HTML, no heavy styling, no marketing layout.
+ */
+function buildPersonalEmail(
+  greeting: string,
+  bodyHtml: string,
+  unsubscribeUrl: string
+): string {
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px;color:#222;line-height:1.6;margin:0;padding:20px;">
+<p>${greeting}</p>
+${bodyHtml}
+<p style="margin-top:32px;font-size:12px;color:#999;">
+${config.company.name} · ${config.company.address}<br>
+<a href="${unsubscribeUrl}" style="color:#999;">Unsubscribe</a>
+</p>
+</body>
+</html>`.trim();
+}
+
+/**
+ * Branded mode: Newsletter-style with header/footer (original template).
+ */
+function buildBrandedEmail(
+  greeting: string,
+  subject: string,
+  bodyHtml: string,
+  unsubscribeUrl: string
+): string {
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${params.subject}</title>
+  <title>${subject}</title>
   <style>
     body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f5f5f5; }
     .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; }
@@ -28,7 +75,6 @@ export function buildRecruitmentEmail(params: {
     .content { padding: 32px; line-height: 1.6; color: #333333; font-size: 15px; }
     .footer { padding: 24px 32px; background-color: #f8f9fa; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #718096; line-height: 1.8; }
     .footer a { color: #4a6fa5; text-decoration: underline; }
-    .unsubscribe { margin-top: 12px; }
   </style>
 </head>
 <body>
@@ -41,15 +87,8 @@ export function buildRecruitmentEmail(params: {
       ${bodyHtml}
     </div>
     <div class="footer">
-      <p>This is a commercial message from <strong>${config.company.name}</strong></p>
-      <p>${config.company.address}</p>
-      <div class="unsubscribe">
-        <p>
-          You're receiving this email because you're in our recruitment network.<br>
-          If you no longer wish to receive these emails,
-          <a href="${unsubscribeUrl}">click here to unsubscribe</a>.
-        </p>
-      </div>
+      <p>${config.company.name} · ${config.company.address}</p>
+      <p><a href="${unsubscribeUrl}">Unsubscribe</a></p>
     </div>
   </div>
 </body>
@@ -74,9 +113,9 @@ export function buildPlainText(params: {
     params.bodyText,
     "",
     "---",
-    `This is a commercial message from ${config.company.name}`,
-    config.company.address,
+    `${config.company.name} · ${config.company.address}`,
     "",
-    `To unsubscribe: ${params.unsubscribeUrl}`,
+    `Unsubscribe: ${params.unsubscribeUrl}`,
   ].join("\n");
 }
+

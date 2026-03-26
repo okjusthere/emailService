@@ -7,6 +7,7 @@ import { startScheduler } from "./services/scheduler.js";
 import webhookRoutes from "./routes/webhook.js";
 import unsubscribeRoutes from "./routes/unsubscribe.js";
 import adminRoutes from "./routes/admin.js";
+import { migrateLegacyContent } from "./services/campaignService.js";
 import { logger } from "./utils/logger.js";
 
 const app = express();
@@ -54,6 +55,9 @@ function bootstrap(): void {
 
     logger.info("Running migrations");
     runMigrations();
+
+    // Migrate legacy email_content.json → campaign
+    migrateLegacyContent();
 
     logger.info("Starting scheduler");
     startScheduler();

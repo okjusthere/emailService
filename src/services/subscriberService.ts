@@ -20,9 +20,25 @@ export interface Subscriber {
  * then users who have never been sent to (NULL last_sent_at).
  * DEDUP: Excludes any subscriber already sent to today.
  */
-export function getNextBatch(count: number): Subscriber[] {
+export function getNextBatch(count: number, tagIds?: number[]): Subscriber[] {
   const db = getDb();
-  const stmt = db.prepare(`
+
+  if (tagIds && tagIds.length > 0) {
+    const placeholders = tagIds.map(() => "?").join(",");
+    return db.prepare(`
+      SELECT DISTINCT s.* FROM subscribers s
+      JOIN subscriber_tags st ON st.subscriber_id = s.id
+      WHERE s.status = 'active'
+        AND (s.last_sent_at IS NULL OR date(s.last_sent_at) < date('now'))
+        AND st.tag_id IN (${placeholders})
+      ORDER BY
+        CASE WHEN s.last_sent_at IS NULL THEN 0 ELSE 1 END,
+        s.last_sent_at ASC
+      LIMIT ?
+    `).all(...tagIds, count) as Subscriber[];
+  }
+
+  return db.prepare(`
     SELECT * FROM subscribers
     WHERE status = 'active'
       AND (last_sent_at IS NULL OR date(last_sent_at) < date('now'))
@@ -30,8 +46,7 @@ export function getNextBatch(count: number): Subscriber[] {
       CASE WHEN last_sent_at IS NULL THEN 0 ELSE 1 END,
       last_sent_at ASC
     LIMIT ?
-  `);
-  return stmt.all(count) as Subscriber[];
+  `).all(count) as Subscriber[];
 }
 
 /**

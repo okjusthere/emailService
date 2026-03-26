@@ -5,6 +5,9 @@ let subscriberPage = 1;
 let selectedIds = new Set();
 let emailAssets = [];
 let isSourceMode = false;
+let allTags = [];
+let currentCampaignId = null;
+let campaignSourceMode = false;
 
 const INLINE_ASSET_PATTERN = /\{\{asset:[a-z0-9-]+\}\}/gi;
 const HTML_SNIPPETS = {
@@ -78,7 +81,8 @@ function navigateTo(page) {
     a.classList.toggle("active", a.dataset.page === page);
   });
   if (page === "dashboard") loadDashboard();
-  else if (page === "subscribers") loadSubscribers();
+  else if (page === "subscribers") { loadTags(); loadSubscribers(); }
+  else if (page === "campaigns") { loadTags(); loadCampaignList(); }
   else if (page === "compose") loadEmailContent();
   else if (page === "history") loadHistory();
 }
@@ -139,15 +143,18 @@ async function loadSubscribers() {
   updateBulkBar();
   const search = document.getElementById("search-input").value;
   const status = document.getElementById("status-filter").value;
+  const tagId = document.getElementById("tag-filter")?.value || "";
   try {
-    const res = await api(`/subscribers?page=${subscriberPage}&limit=50&status=${status}&search=${encodeURIComponent(search)}`);
+    let url = `/subscribers?page=${subscriberPage}&limit=50&status=${status}&search=${encodeURIComponent(search)}`;
+    if (tagId) url += `&tagId=${tagId}`;
+    const res = await api(url);
     const data = await res.json();
     const tbody = document.getElementById("subscribers-body");
     const selectAll = document.getElementById("select-all");
     selectAll.checked = false;
 
     if (!data.subscribers?.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="center">No subscribers found</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="center">No subscribers found</td></tr>';
       document.getElementById("pagination").innerHTML = "";
       return;
     }
@@ -156,6 +163,7 @@ async function loadSubscribers() {
         <td><input type="checkbox" class="row-select" data-id="${s.id}"></td>
         <td>${escapeHtml(s.email)}</td>
         <td>${escapeHtml(s.name || "—")}</td>
+        <td><div class="tag-pill-list">${(s.tags || []).map(t => `<span class="tag-pill">${escapeHtml(t.name)}</span>`).join("") || "—"}</div></td>
         <td><span class="badge badge-${s.status}">${s.status}</span></td>
         <td>${s.send_count || 0}</td>
         <td>${s.last_sent_at ? formatDate(s.last_sent_at) : "—"}</td>
@@ -238,6 +246,74 @@ document.getElementById("bulk-activate")?.addEventListener("click", async () => 
     toast(`Activated ${selectedIds.size} subscribers`);
     loadSubscribers();
   } catch { toast("Bulk activate failed", "error"); }
+});
+
+// ── Tags ─────────────────────────────────
+async function loadTags() {
+  try {
+    const res = await api("/tags");
+    const data = await res.json();
+    allTags = data.tags || [];
+    // Populate subscriber tag filter
+    const tagFilter = document.getElementById("tag-filter");
+    if (tagFilter) {
+      const val = tagFilter.value;
+      tagFilter.innerHTML = '<option value="">All Tags</option>' + allTags.map(t => `<option value="${t.id}">${escapeHtml(t.name)} (${t.subscriber_count || 0})</option>`).join("");
+      tagFilter.value = val;
+    }
+    // Populate tag select in modal
+    const tagSelect = document.getElementById("tag-select");
+    if (tagSelect) {
+      tagSelect.innerHTML = allTags.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join("");
+    }
+    // Populate campaign tag filter
+    const campaignTagFilter = document.getElementById("campaign-tag-filter");
+    if (campaignTagFilter) {
+      const cval = campaignTagFilter.value;
+      campaignTagFilter.innerHTML = '<option value="">All Subscribers</option>' + allTags.map(t => `<option value="${t.id}">${escapeHtml(t.name)} (${t.subscriber_count || 0})</option>`).join("");
+      campaignTagFilter.value = cval;
+    }
+  } catch {} // silent
+}
+
+document.getElementById("create-tag-btn")?.addEventListener("click", async () => {
+  const nameEl = document.getElementById("new-tag-name");
+  const name = nameEl.value.trim();
+  if (!name) return;
+  try {
+    const res = await api("/tags", { method: "POST", body: JSON.stringify({ name }) });
+    const data = await res.json();
+    if (data.success) {
+      nameEl.value = "";
+      toast(`Tag "${name}" created`);
+      await loadTags();
+    } else {
+      toast(data.error || "Failed", "error");
+    }
+  } catch { toast("Failed to create tag", "error"); }
+});
+
+function openTagModal(action) {
+  document.getElementById("tag-action-type").dataset.action = action;
+  document.getElementById("tag-modal").classList.remove("hidden");
+}
+
+document.getElementById("bulk-tag")?.addEventListener("click", () => openTagModal("tag"));
+document.getElementById("bulk-untag")?.addEventListener("click", () => openTagModal("untag"));
+
+document.getElementById("apply-tag-btn")?.addEventListener("click", async () => {
+  const action = document.getElementById("tag-action-type").dataset.action;
+  const tagId = parseInt(document.getElementById("tag-select").value);
+  if (!tagId || selectedIds.size === 0) return;
+  try {
+    await api(`/subscribers/${action}`, {
+      method: "POST",
+      body: JSON.stringify({ ids: Array.from(selectedIds), tagId }),
+    });
+    toast(`${action === "tag" ? "Tagged" : "Untagged"} ${selectedIds.size} subscribers`);
+    document.getElementById("tag-modal").classList.add("hidden");
+    loadSubscribers();
+  } catch { toast("Operation failed", "error"); }
 });
 
 // ── CSV Template Download ────────────────
@@ -889,9 +965,276 @@ document.getElementById("search-input")?.addEventListener("input", () => {
   searchTimeout = setTimeout(() => { subscriberPage = 1; loadSubscribers(); }, 300);
 });
 document.getElementById("status-filter")?.addEventListener("change", () => { subscriberPage = 1; loadSubscribers(); });
+document.getElementById("tag-filter")?.addEventListener("change", () => { subscriberPage = 1; loadSubscribers(); });
 document.getElementById("email-subject")?.addEventListener("input", updatePreview);
 document.getElementById("email-html-source")?.addEventListener("input", onEditorInput);
 initRichToolbar();
+
+// ── Campaigns ────────────────────────────
+async function loadCampaignList() {
+  document.getElementById("campaign-list-view").classList.remove("hidden");
+  document.getElementById("campaign-editor-view").classList.add("hidden");
+  try {
+    const res = await api("/campaigns");
+    const data = await res.json();
+    const container = document.getElementById("campaign-cards");
+    if (!data.campaigns?.length) {
+      container.innerHTML = '<p style="color:var(--text-secondary);text-align:center;padding:40px 0">No campaigns yet. Click "New Campaign" to get started.</p>';
+      return;
+    }
+    container.innerHTML = data.campaigns.map(c => {
+      const s = c.stats || {};
+      const openRate = s.delivered ? ((s.opened / s.delivered) * 100).toFixed(1) : "0.0";
+      return `
+        <div class="campaign-card" data-id="${c.id}">
+          <div class="campaign-card-header">
+            <span class="campaign-card-name">${escapeHtml(c.name)}</span>
+            <span class="campaign-status ${c.status}">${c.status}</span>
+          </div>
+          <div class="campaign-card-subject">${escapeHtml(c.subject || "(no subject)")}</div>
+          <div class="campaign-card-stats">
+            <span>📤 ${s.total_sent || 0} sent</span>
+            <span>📬 ${openRate}% opened</span>
+            <span>🔴 ${s.bounced || 0} bounced</span>
+          </div>
+          <div class="campaign-card-actions">
+            <button class="btn-secondary btn-sm" onclick="event.stopPropagation(); duplicateCampaign('${c.id}')">📋 Duplicate</button>
+            <button class="btn-danger btn-sm" onclick="event.stopPropagation(); deleteCampaignUI('${c.id}')">🗑 Delete</button>
+          </div>
+        </div>`;
+    }).join("");
+    // Click to open editor
+    container.querySelectorAll(".campaign-card").forEach(card => {
+      card.addEventListener("click", () => openCampaignEditor(card.dataset.id));
+    });
+  } catch { toast("Failed to load campaigns", "error"); }
+}
+
+async function openCampaignEditor(id) {
+  if (id) {
+    try {
+      const res = await api(`/campaigns/${id}`);
+      const data = await res.json();
+      const c = data.campaign;
+      currentCampaignId = c.id;
+      document.getElementById("campaign-name").value = c.name;
+      document.getElementById("campaign-subject").value = c.subject;
+      document.getElementById("campaign-rich-editor").innerHTML = c.body_html || "";
+      document.getElementById("campaign-html-source").value = c.body_html || "";
+      document.getElementById("campaign-text").value = c.body_text || "";
+      document.getElementById("campaign-tag-filter").value = c.tag_filter || "";
+
+      // Disable editing if sent
+      const isSent = c.status === "sent";
+      document.getElementById("campaign-save").style.display = isSent ? "none" : "";
+      document.getElementById("campaign-send-btn").style.display = isSent ? "none" : "";
+      document.getElementById("campaign-rich-editor").contentEditable = !isSent;
+
+      // Show stats for sent campaigns
+      const statsBar = document.getElementById("campaign-sent-stats");
+      if (isSent && data.stats) {
+        const s = data.stats;
+        const openRate = s.delivered ? ((s.opened / s.delivered) * 100).toFixed(1) : "0.0";
+        const clickRate = s.delivered ? ((s.clicked / s.delivered) * 100).toFixed(1) : "0.0";
+        const bounceRate = s.total_sent ? ((s.bounced / s.total_sent) * 100).toFixed(1) : "0.0";
+        statsBar.innerHTML = `
+          <div class="cs-item"><span class="cs-value">${s.total_sent}</span><span class="cs-label">Sent</span></div>
+          <div class="cs-item"><span class="cs-value">${s.delivered}</span><span class="cs-label">Delivered</span></div>
+          <div class="cs-item"><span class="cs-value" style="color:var(--green)">${openRate}%</span><span class="cs-label">Opened</span></div>
+          <div class="cs-item"><span class="cs-value" style="color:var(--blue)">${clickRate}%</span><span class="cs-label">Clicked</span></div>
+          <div class="cs-item"><span class="cs-value" style="color:var(--red)">${bounceRate}%</span><span class="cs-label">Bounced</span></div>
+        `;
+        statsBar.classList.remove("hidden");
+      } else {
+        statsBar.classList.add("hidden");
+      }
+    } catch { toast("Failed to load campaign", "error"); return; }
+  } else {
+    // New campaign
+    currentCampaignId = null;
+    document.getElementById("campaign-name").value = "";
+    document.getElementById("campaign-subject").value = "";
+    document.getElementById("campaign-rich-editor").innerHTML = "";
+    document.getElementById("campaign-html-source").value = "";
+    document.getElementById("campaign-text").value = "";
+    document.getElementById("campaign-tag-filter").value = "";
+    document.getElementById("campaign-save").style.display = "";
+    document.getElementById("campaign-send-btn").style.display = "";
+    document.getElementById("campaign-rich-editor").contentEditable = true;
+    document.getElementById("campaign-sent-stats").classList.add("hidden");
+  }
+  document.getElementById("campaign-list-view").classList.add("hidden");
+  document.getElementById("campaign-editor-view").classList.remove("hidden");
+  updateCampaignPreview();
+}
+
+async function saveCampaign() {
+  const name = document.getElementById("campaign-name").value.trim();
+  if (!name) { toast("Campaign name is required", "error"); return; }
+  const bodyHtml = campaignSourceMode
+    ? document.getElementById("campaign-html-source").value
+    : document.getElementById("campaign-rich-editor").innerHTML;
+  const payload = {
+    name,
+    subject: document.getElementById("campaign-subject").value,
+    body_html: bodyHtml,
+    body_text: document.getElementById("campaign-text").value,
+    tag_filter: document.getElementById("campaign-tag-filter").value || null,
+  };
+  try {
+    let res;
+    if (currentCampaignId) {
+      res = await api(`/campaigns/${currentCampaignId}`, { method: "PUT", body: JSON.stringify(payload) });
+    } else {
+      res = await api("/campaigns", { method: "POST", body: JSON.stringify(payload) });
+    }
+    const data = await res.json();
+    if (data.success || data.campaign) {
+      currentCampaignId = data.campaign.id;
+      toast("Campaign saved");
+    } else {
+      toast(data.error || "Failed to save", "error");
+    }
+  } catch { toast("Failed to save campaign", "error"); }
+}
+
+async function duplicateCampaign(id) {
+  try {
+    const res = await api(`/campaigns/${id}/duplicate`, { method: "POST" });
+    const data = await res.json();
+    if (data.success) {
+      toast("Campaign duplicated");
+      loadCampaignList();
+    }
+  } catch { toast("Failed to duplicate", "error"); }
+}
+
+async function deleteCampaignUI(id) {
+  if (!confirm("Delete this campaign?")) return;
+  try {
+    await api(`/campaigns/${id}`, { method: "DELETE" });
+    toast("Campaign deleted");
+    loadCampaignList();
+  } catch { toast("Failed to delete", "error"); }
+}
+
+async function updateCampaignPreview() {
+  if (!currentCampaignId) return;
+  try {
+    await saveCampaign();
+    const res = await api(`/campaigns/${currentCampaignId}/preview`, { method: "POST" });
+    const html = await res.text();
+    document.getElementById("campaign-preview").innerHTML = html;
+  } catch {}
+}
+
+// Campaign editor toolbar
+function initCampaignToolbar() {
+  const toolbar = document.getElementById("campaign-rich-toolbar");
+  const editor = document.getElementById("campaign-rich-editor");
+  if (!toolbar || !editor) return;
+
+  toolbar.querySelectorAll("button[data-cmd]").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      editor.focus();
+      const cmd = btn.dataset.cmd;
+      const val = btn.dataset.val || null;
+      if (cmd === "createLink") {
+        const url = prompt("Enter URL:");
+        if (url) document.execCommand(cmd, false, url);
+      } else if (cmd === "formatBlock" && val) {
+        document.execCommand(cmd, false, `<${val}>`);
+      } else {
+        document.execCommand(cmd, false, val);
+      }
+    });
+  });
+
+  // Source toggle
+  const sourceToggle = document.getElementById("campaign-source-toggle");
+  const source = document.getElementById("campaign-html-source");
+  sourceToggle?.addEventListener("click", () => {
+    campaignSourceMode = !campaignSourceMode;
+    if (campaignSourceMode) {
+      source.value = editor.innerHTML;
+      editor.style.display = "none";
+      source.style.display = "";
+      sourceToggle.classList.add("active");
+    } else {
+      editor.innerHTML = source.value;
+      editor.style.display = "";
+      source.style.display = "none";
+      sourceToggle.classList.remove("active");
+    }
+  });
+
+  // Auto-sync plain text
+  let syncTimeout;
+  editor.addEventListener("input", () => {
+    clearTimeout(syncTimeout);
+    syncTimeout = setTimeout(() => {
+      const text = editor.innerText || editor.textContent || "";
+      document.getElementById("campaign-text").value = text.replace(/\n{3,}/g, "\n\n").trim();
+    }, 400);
+  });
+}
+
+// Campaign event listeners
+document.getElementById("create-campaign-btn")?.addEventListener("click", () => openCampaignEditor(null));
+document.getElementById("campaign-back")?.addEventListener("click", () => loadCampaignList());
+document.getElementById("campaign-save")?.addEventListener("click", saveCampaign);
+
+document.getElementById("campaign-test-btn")?.addEventListener("click", async () => {
+  if (!currentCampaignId) { toast("Save campaign first", "error"); return; }
+  await saveCampaign();
+  document.getElementById("campaign-test-modal").classList.remove("hidden");
+});
+
+document.getElementById("campaign-test-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const email = document.getElementById("campaign-test-email").value;
+  try {
+    const res = await api(`/campaigns/${currentCampaignId}/test-send`, {
+      method: "POST", body: JSON.stringify({ email }),
+    });
+    const data = await res.json();
+    if (data.success) { toast(`Test sent to ${email}`); document.getElementById("campaign-test-modal").classList.add("hidden"); }
+    else toast(data.error || "Failed", "error");
+  } catch { toast("Test send failed", "error"); }
+});
+
+document.getElementById("campaign-send-btn")?.addEventListener("click", async () => {
+  if (!currentCampaignId) { toast("Save campaign first", "error"); return; }
+  await saveCampaign();
+  document.getElementById("campaign-send-modal").classList.remove("hidden");
+});
+
+document.getElementById("confirm-campaign-send")?.addEventListener("click", async () => {
+  document.getElementById("campaign-send-modal").classList.add("hidden");
+  try {
+    const res = await api(`/campaigns/${currentCampaignId}/send`, { method: "POST" });
+    const data = await res.json();
+    if (data.success) {
+      toast(`Campaign sent! ${data.sent} delivered, ${data.failed} failed`);
+      openCampaignEditor(currentCampaignId); // Reload to show stats
+    } else {
+      toast(data.error || "Send failed", "error");
+    }
+  } catch { toast("Campaign send failed", "error"); }
+});
+
+initCampaignToolbar();
+
+// Merge tag click-to-insert
+document.querySelectorAll(".merge-tag-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const tag = btn.dataset.tag;
+    const editor = document.getElementById("campaign-rich-editor");
+    editor.focus();
+    document.execCommand("insertText", false, tag);
+  });
+});
 
 // ── Init ─────────────────────────────────
 (async () => {

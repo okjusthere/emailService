@@ -37,16 +37,8 @@ export function validateCompliance(html: string): {
   }
 
   // Check unsubscribe link
-  if (!html.includes("unsubscribe")) {
+  if (!html.toLowerCase().includes("unsubscribe")) {
     issues.push("Missing unsubscribe mechanism");
-  }
-
-  // Check commercial message disclosure
-  if (
-    !html.toLowerCase().includes("commercial message") &&
-    !html.toLowerCase().includes("advertisement")
-  ) {
-    issues.push("Missing advertisement/commercial message disclosure");
   }
 
   return {

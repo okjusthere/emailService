@@ -500,3 +500,79 @@ tbody tr:hover { background: var(--bg-hover); }
 .preview-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .preview-header h3 { margin-bottom: 0; }
 .preview-caption { max-width: 280px; text-align: right; font-size: 12px; color: var(--text-secondary); }
+
+/* ── Campaign Grid ──────────────────── */
+.campaign-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+.campaign-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.campaign-card:hover { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(99,102,241,0.15); }
+.campaign-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.campaign-card-name { font-weight: 600; font-size: 15px; }
+.campaign-status { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 99px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+.campaign-status.draft { background: rgba(99,102,241,0.12); color: var(--primary); }
+.campaign-status.sending { background: rgba(245,158,11,0.12); color: var(--orange); }
+.campaign-status.sent { background: rgba(34,197,94,0.12); color: var(--green); }
+.campaign-card-subject { font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.campaign-card-stats { display: flex; gap: 16px; font-size: 12px; color: var(--text-secondary); }
+.campaign-card-stats span { display: flex; align-items: center; gap: 4px; }
+.campaign-card-actions { display: flex; gap: 8px; margin-top: 12px; }
+.campaign-name-input { background: transparent; border: none; border-bottom: 2px solid var(--border); font-size: 20px; font-weight: 700; color: var(--text); padding: 4px 0; outline: none; min-width: 260px; transition: border-color 0.2s; }
+.campaign-name-input:focus { border-color: var(--primary); }
+.campaign-stats-bar {
+  display: flex; gap: 24px; background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px 20px; margin-bottom: 16px;
+}
+.campaign-stats-bar .cs-item { display: flex; flex-direction: column; gap: 2px; }
+.campaign-stats-bar .cs-value { font-size: 20px; font-weight: 700; }
+.campaign-stats-bar .cs-label { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.4px; }
+
+/* ── Tag Pills ──────────────────────── */
+.tag-pill {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 8px; border-radius: 99px; font-size: 10px; font-weight: 600;
+  background: rgba(99,102,241,0.12); color: var(--primary); white-space: nowrap;
+}
+.tag-pill-list { display: flex; flex-wrap: wrap; gap: 4px; }
+.campaign-card-tag { font-size: 10px; padding: 2px 7px; border-radius: 99px; background: rgba(99,102,241,0.1); color: var(--primary); }
+
+/* ── Campaign Editor shared styles ──── */
+#campaign-rich-editor {
+  min-height: 260px; max-height: 500px; overflow-y: auto;
+  padding: 16px 18px; border: 1px solid var(--border); border-top: none;
+  border-radius: 0 0 8px 8px; background: var(--bg-input); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
+  font-size: 14px; line-height: 1.7; outline: none;
+}
+#campaign-rich-editor:focus { border-color: var(--primary); }
+#campaign-rich-editor:empty::before { content: attr(data-placeholder); color: var(--text-secondary); pointer-events: none; }
+#campaign-rich-editor p { margin: 0 0 8px 0; }
+#campaign-rich-editor ul, #campaign-rich-editor ol { margin: 4px 0 8px 20px; padding: 0; }
+#campaign-rich-editor h1 { font-size: 24px; font-weight: 700; margin: 0 0 8px 0; }
+#campaign-rich-editor h2 { font-size: 20px; font-weight: 600; margin: 0 0 8px 0; }
+#campaign-rich-editor h3 { font-size: 16px; font-weight: 600; margin: 0 0 8px 0; }
+#campaign-rich-editor blockquote { margin: 8px 0; padding: 8px 16px; border-left: 3px solid var(--primary); background: rgba(99,102,241,0.06); border-radius: 0 6px 6px 0; }
+#campaign-rich-editor a { color: var(--primary); text-decoration: underline; }
+#campaign-rich-editor hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+#campaign-rich-editor img { max-width: 480px; width: auto; height: auto; border-radius: 8px; margin: 8px 0; cursor: pointer; }
+
+/* ── Merge Tag Bar ──────────────────── */
+.merge-tag-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 14px; margin-bottom: 12px;
+  background: rgba(99,102,241,0.06); border: 1px dashed rgba(99,102,241,0.25);
+  border-radius: var(--radius);
+}
+.merge-tag-label { font-size: 12px; font-weight: 600; color: var(--primary); white-space: nowrap; }
+.merge-tag-btn {
+  padding: 4px 10px; font-size: 11px; font-weight: 600; font-family: 'SF Mono', 'Fira Code', monospace;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px;
+  color: var(--primary); cursor: pointer; transition: all 0.15s;
+}
+.merge-tag-btn:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+

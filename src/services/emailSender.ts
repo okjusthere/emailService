@@ -74,6 +74,19 @@ function prepareEmailContent(content: EmailContent): PreparedEmailContent {
   };
 }
 
+/**
+ * Replace merge tags like {{name}}, {{email}} with subscriber-specific values.
+ */
+function replaceMergeTags(
+  text: string,
+  subscriber: Subscriber
+): string {
+  return text
+    .replace(/\{\{name\}\}/gi, subscriber.name || "there")
+    .replace(/\{\{email\}\}/gi, subscriber.email)
+    .replace(/\{\{first_name\}\}/gi, (subscriber.name || "there").split(" ")[0]);
+}
+
 function buildSubscriberEmail(
   subscriber: Subscriber,
   content: PreparedEmailContent
@@ -84,15 +97,20 @@ function buildSubscriberEmail(
   text: string;
 } {
   const unsubscribeUrl = buildUnsubscribeUrl(subscriber.unsubscribe_token);
+
+  // Apply merge tags to body content
+  const personalizedHtml = replaceMergeTags(content.resolvedBodyHtml, subscriber);
+  const personalizedText = replaceMergeTags(content.bodyText, subscriber);
+
   const html = buildRecruitmentEmail({
     recipientName: subscriber.name || undefined,
     subject: content.subject,
-    bodyHtml: content.resolvedBodyHtml,
+    bodyHtml: personalizedHtml,
     unsubscribeUrl,
   });
   const text = buildPlainText({
     recipientName: subscriber.name || undefined,
-    bodyText: content.bodyText,
+    bodyText: personalizedText,
     unsubscribeUrl,
   });
 
@@ -131,7 +149,8 @@ function assertResendSuccess(
 async function sendBatchEmails(
   subscribers: Subscriber[],
   content: PreparedEmailContent,
-  batchId: string
+  batchId: string,
+  campaignId?: string
 ): Promise<{ failed: number; sent: number }> {
   const db = getDb();
 
@@ -158,12 +177,12 @@ async function sendBatchEmails(
     }[];
 
     const insertSuccessLog = db.prepare(
-      `INSERT INTO send_logs (batch_id, subscriber_id, resend_email_id, status, sent_at)
-       VALUES (?, ?, ?, ?, datetime('now'))`
+      `INSERT INTO send_logs (batch_id, subscriber_id, resend_email_id, status, sent_at, campaign_id)
+       VALUES (?, ?, ?, ?, datetime('now'), ?)`
     );
     const insertFailureLog = db.prepare(
-      `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message)
-       VALUES (?, ?, 'failed', ?)`
+      `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message, campaign_id)
+       VALUES (?, ?, 'failed', ?, ?)`
     );
     const successfulSubscriberIds: number[] = [];
 
@@ -174,14 +193,15 @@ async function sendBatchEmails(
 
         if (emailResult?.id) {
           successfulSubscriberIds.push(subscriber.id);
-          insertSuccessLog.run(batchId, subscriber.id, emailResult.id, "sent");
+          insertSuccessLog.run(batchId, subscriber.id, emailResult.id, "sent", campaignId || null);
           continue;
         }
 
         insertFailureLog.run(
           batchId,
           subscriber.id,
-          "Resend batch API did not return an email id"
+          "Resend batch API did not return an email id",
+          campaignId || null
         );
       }
     })();
@@ -198,13 +218,13 @@ async function sendBatchEmails(
     logger.error(`Batch send failed: ${error.message}`);
 
     const insertFailureLog = db.prepare(
-      `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message)
-       VALUES (?, ?, 'failed', ?)`
+      `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message, campaign_id)
+       VALUES (?, ?, 'failed', ?, ?)`
     );
 
     db.transaction(() => {
       for (const subscriber of subscribers) {
-        insertFailureLog.run(batchId, subscriber.id, error.message);
+        insertFailureLog.run(batchId, subscriber.id, error.message, campaignId || null);
       }
     })();
 
@@ -215,7 +235,8 @@ async function sendBatchEmails(
 async function sendInlineEmails(
   subscribers: Subscriber[],
   content: PreparedEmailContent,
-  batchId: string
+  batchId: string,
+  campaignId?: string
 ): Promise<{ failed: number; sent: number }> {
   const db = getDb();
   const resend = getResendClient();
@@ -261,17 +282,17 @@ async function sendInlineEmails(
           }
 
           db.prepare(
-            `INSERT INTO send_logs (batch_id, subscriber_id, resend_email_id, status, sent_at)
-             VALUES (?, ?, ?, ?, datetime('now'))`
-          ).run(batchId, subscriber.id, data.id, "sent");
+            `INSERT INTO send_logs (batch_id, subscriber_id, resend_email_id, status, sent_at, campaign_id)
+             VALUES (?, ?, ?, ?, datetime('now'), ?)`
+          ).run(batchId, subscriber.id, data.id, "sent", campaignId || null);
 
           markAsSent([subscriber.id]);
           sent += 1;
         } catch (error: any) {
           db.prepare(
-            `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message)
-             VALUES (?, ?, 'failed', ?)`
-          ).run(batchId, subscriber.id, error.message);
+            `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message, campaign_id)
+             VALUES (?, ?, 'failed', ?, ?)`
+          ).run(batchId, subscriber.id, error.message, campaignId || null);
 
           failed += 1;
           logger.error(`Inline send failed for ${subscriber.email}: ${error.message}`);
@@ -287,16 +308,17 @@ async function sendInlineEmails(
 async function sendChunk(
   subscribers: Subscriber[],
   content: PreparedEmailContent,
-  batchId: string
+  batchId: string,
+  campaignId?: string
 ): Promise<{ failed: number; sent: number }> {
   if (content.usesEmbeddedAssets) {
-    return sendInlineEmails(subscribers, content, batchId);
+    return sendInlineEmails(subscribers, content, batchId, campaignId);
   }
 
-  return sendBatchEmails(subscribers, content, batchId);
+  return sendBatchEmails(subscribers, content, batchId, campaignId);
 }
 
-export async function executeDailySend(content: EmailContent): Promise<{
+export async function executeDailySend(content: EmailContent, campaignId?: string, tagIds?: number[]): Promise<{
   batchId: string;
   totalSent: number;
   totalFailed: number;
@@ -307,7 +329,7 @@ export async function executeDailySend(content: EmailContent): Promise<{
 
   const batchId = randomUUID();
   const db = getDb();
-  const subscribers = getNextBatch(effectiveLimit);
+  const subscribers = getNextBatch(effectiveLimit, tagIds);
 
   if (subscribers.length === 0) {
     logger.warn("No active subscribers to send to (all sent today or none active)");
@@ -321,8 +343,8 @@ export async function executeDailySend(content: EmailContent): Promise<{
   );
 
   db.prepare(
-    `INSERT INTO batches (id, total_count, status, started_at) VALUES (?, ?, 'in_progress', datetime('now'))`
-  ).run(batchId, subscribers.length);
+    `INSERT INTO batches (id, total_count, status, started_at, campaign_id) VALUES (?, ?, 'in_progress', datetime('now'), ?)`
+  ).run(batchId, subscribers.length, campaignId || null);
 
   let totalSent = 0;
   let totalFailed = 0;
@@ -335,7 +357,7 @@ export async function executeDailySend(content: EmailContent): Promise<{
   try {
     for (let index = 0; index < chunks.length; index++) {
       const chunk = chunks[index];
-      const result = await sendChunk(chunk, preparedContent, batchId);
+      const result = await sendChunk(chunk, preparedContent, batchId, campaignId);
       totalSent += result.sent;
       totalFailed += result.failed;
 

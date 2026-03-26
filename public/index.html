@@ -32,7 +32,7 @@
       <ul class="nav-links">
         <li><a href="#" data-page="dashboard" class="active"><span class="icon">📊</span> Dashboard</a></li>
         <li><a href="#" data-page="subscribers"><span class="icon">👥</span> Subscribers</a></li>
-        <li><a href="#" data-page="compose"><span class="icon">✉️</span> Compose</a></li>
+        <li><a href="#" data-page="campaigns"><span class="icon">📨</span> Campaigns</a></li>
         <li><a href="#" data-page="history"><span class="icon">📋</span> History</a></li>
       </ul>
       <div class="sidebar-footer">
@@ -140,13 +140,37 @@
             <option value="bounced">Bounced</option>
             <option value="complained">Complained</option>
           </select>
+          <select id="tag-filter">
+            <option value="">All Tags</option>
+          </select>
         </div>
 
         <!-- Bulk Actions Bar -->
         <div id="bulk-bar" class="bulk-bar hidden">
           <span id="selected-count">0 selected</span>
           <button id="bulk-activate" class="btn-secondary btn-sm">✅ Activate</button>
+          <button id="bulk-tag" class="btn-secondary btn-sm">🏷 Tag</button>
+          <button id="bulk-untag" class="btn-secondary btn-sm">🏷 Untag</button>
           <button id="bulk-delete" class="btn-danger btn-sm">🗑 Delete</button>
+        </div>
+
+        <!-- Tag Modal -->
+        <div id="tag-modal" class="modal hidden">
+          <div class="modal-content">
+            <div class="modal-header"><h3>🏷 Manage Tags</h3><button class="modal-close" data-close="tag-modal">✕</button></div>
+            <div class="modal-body">
+              <div id="tag-action-type" data-action="tag"></div>
+              <select id="tag-select"></select>
+              <div style="display:flex;gap:8px;margin-top:8px">
+                <input type="text" id="new-tag-name" placeholder="New tag name..." style="flex:1">
+                <button type="button" id="create-tag-btn" class="btn-secondary btn-sm">Create</button>
+              </div>
+              <div class="modal-actions" style="margin-top:12px">
+                <button id="apply-tag-btn" class="btn-primary">Apply</button>
+                <button class="btn-secondary" data-close="tag-modal">Cancel</button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div class="card">
@@ -154,147 +178,140 @@
             <thead>
               <tr>
                 <th><input type="checkbox" id="select-all"></th>
-                <th>Email</th><th>Name</th><th>Status</th><th>Sends</th><th>Last Sent</th><th>Actions</th>
+                <th>Email</th><th>Name</th><th>Tags</th><th>Status</th><th>Sends</th><th>Last Sent</th><th>Actions</th>
               </tr>
             </thead>
-            <tbody id="subscribers-body"><tr><td colspan="7" class="center">Loading...</td></tr></tbody>
+            <tbody id="subscribers-body"><tr><td colspan="8" class="center">Loading...</td></tr></tbody>
           </table>
           <div class="pagination" id="pagination"></div>
         </div>
       </section>
 
-      <!-- Compose Page -->
-      <section id="page-compose" class="page hidden">
-        <div class="page-header">
-          <h1>Compose Email</h1>
-          <div class="header-actions">
-            <button id="save-email" class="btn-secondary">💾 Save</button>
-            <button id="test-send-btn" class="btn-secondary">📧 Test Send</button>
-            <button id="send-email" class="btn-primary btn-send">🚀 Send to Next Batch</button>
+      <!-- Campaigns Page -->
+      <section id="page-campaigns" class="page hidden">
+        <!-- Campaign list view -->
+        <div id="campaign-list-view">
+          <div class="page-header">
+            <h1>Campaigns</h1>
+            <button id="create-campaign-btn" class="btn-primary">➕ New Campaign</button>
           </div>
+          <div id="campaign-cards" class="campaign-grid">Loading...</div>
         </div>
-        <div id="delivery-mode-banner" class="compose-banner hidden"></div>
-        <div class="compose-layout">
-          <div class="compose-editor">
-            <div class="editor-panel">
-              <div class="form-group">
-                <label for="email-subject">Subject</label>
-                <input type="text" id="email-subject" placeholder="Email subject line">
-              </div>
 
-              <div class="editor-toolbar">
-                <div>
-                  <p class="editor-toolbar-label">Quick Blocks</p>
-                  <div class="snippet-grid">
-                    <button type="button" class="snippet-btn" data-snippet="intro">Intro</button>
-                    <button type="button" class="snippet-btn" data-snippet="feature-list">Feature List</button>
-                    <button type="button" class="snippet-btn" data-snippet="cta">CTA</button>
-                    <button type="button" class="snippet-btn" data-snippet="divider">Divider</button>
-                    <button type="button" class="snippet-btn" data-snippet="signature">Signature</button>
+        <!-- Campaign editor view (hidden by default) -->
+        <div id="campaign-editor-view" class="hidden">
+          <div class="page-header">
+            <div style="display:flex;align-items:center;gap:12px">
+              <button id="campaign-back" class="btn-ghost">← Back</button>
+              <input type="text" id="campaign-name" placeholder="Campaign name" class="campaign-name-input">
+            </div>
+            <div class="header-actions">
+              <button id="campaign-save" class="btn-secondary">💾 Save</button>
+              <button id="campaign-test-btn" class="btn-secondary">📧 Test Send</button>
+              <button id="campaign-send-btn" class="btn-primary btn-send">🚀 Send Campaign</button>
+            </div>
+          </div>
+
+          <div id="campaign-sent-stats" class="campaign-stats-bar hidden"></div>
+
+          <div class="compose-layout">
+            <div class="compose-editor">
+              <div class="editor-panel">
+                <!-- Tag filter selector -->
+                <div class="form-group">
+                  <label>Send To</label>
+                  <select id="campaign-tag-filter" style="width:100%">
+                    <option value="">All Subscribers</option>
+                  </select>
+                  <span class="field-tip">Select a tag to send only to that audience segment.</span>
+                </div>
+
+                <div class="form-group">
+                  <label for="campaign-subject">Subject</label>
+                  <input type="text" id="campaign-subject" placeholder="Email subject line">
+                </div>
+
+                <div class="merge-tag-bar">
+                  <span class="merge-tag-label">🏷 Merge Tags</span>
+                  <button type="button" class="merge-tag-btn" data-tag="{{name}}">{{name}}</button>
+                  <button type="button" class="merge-tag-btn" data-tag="{{first_name}}">{{first_name}}</button>
+                  <button type="button" class="merge-tag-btn" data-tag="{{email}}">{{email}}</button>
+                  <span class="field-tip" style="margin-left:auto">Click to insert. Auto-replaced with each subscriber's data on send.</span>
+                </div>
+
+                <div class="form-group">
+                  <div class="field-header">
+                    <label>Email Body</label>
+                    <span class="field-tip">Format with the toolbar, or switch to Source to edit HTML directly.</span>
                   </div>
-                </div>
-                <div class="toolbar-actions">
-                  <button id="full-preview-btn" class="btn-secondary btn-sm">🔍 Full Preview</button>
-                </div>
-              </div>
-
-              <div class="form-group">
-                <div class="field-header">
-                  <label>Email Body</label>
-                  <span class="field-tip">Format with the toolbar, or switch to Source to edit HTML directly.</span>
-                </div>
-                <div class="rich-toolbar" id="rich-toolbar">
-                  <button type="button" data-cmd="bold" title="Bold"><b>B</b></button>
-                  <button type="button" data-cmd="italic" title="Italic"><i>I</i></button>
-                  <button type="button" data-cmd="underline" title="Underline"><u>U</u></button>
-                  <button type="button" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
-                  <span class="tb-sep"></span>
-                  <button type="button" data-cmd="formatBlock" data-val="H1" title="Heading 1">H1</button>
-                  <button type="button" data-cmd="formatBlock" data-val="H2" title="Heading 2">H2</button>
-                  <button type="button" data-cmd="formatBlock" data-val="H3" title="Heading 3">H3</button>
-                  <button type="button" data-cmd="formatBlock" data-val="P" title="Paragraph">¶</button>
-                  <span class="tb-sep"></span>
-                  <button type="button" data-cmd="insertUnorderedList" title="Bullet List">•≡</button>
-                  <button type="button" data-cmd="insertOrderedList" title="Numbered List">1.</button>
-                  <span class="tb-sep"></span>
-                  <button type="button" data-cmd="createLink" title="Insert Link">🔗</button>
-                  <button type="button" data-cmd="formatBlock" data-val="BLOCKQUOTE" title="Blockquote">❝</button>
-                  <button type="button" data-cmd="insertHorizontalRule" title="Horizontal Rule">—</button>
-                  <button type="button" data-cmd="removeFormat" title="Clear Formatting">⊘</button>
-                  <span class="tb-sep"></span>
-                  <button type="button" data-cmd="undo" title="Undo">↩</button>
-                  <button type="button" data-cmd="redo" title="Redo">↪</button>
-                  <button type="button" id="source-toggle" class="tb-source" title="Toggle HTML Source">&lt;/&gt; Source</button>
-                </div>
-                <div id="rich-editor" contenteditable="true" data-placeholder="Start writing your email content here…"></div>
-                <textarea id="email-html-source" rows="14" placeholder="<p>Your email content here...</p>"></textarea>
-              </div>
-
-              <section class="asset-studio">
-                <div class="asset-studio-header">
-                  <div>
-                    <p class="asset-eyebrow">Inline Images</p>
-                    <h3>Asset Library</h3>
+                  <div class="rich-toolbar" id="campaign-rich-toolbar">
+                    <button type="button" data-cmd="bold" title="Bold"><b>B</b></button>
+                    <button type="button" data-cmd="italic" title="Italic"><i>I</i></button>
+                    <button type="button" data-cmd="underline" title="Underline"><u>U</u></button>
+                    <button type="button" data-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+                    <span class="tb-sep"></span>
+                    <button type="button" data-cmd="formatBlock" data-val="H1" title="Heading 1">H1</button>
+                    <button type="button" data-cmd="formatBlock" data-val="H2" title="Heading 2">H2</button>
+                    <button type="button" data-cmd="formatBlock" data-val="H3" title="Heading 3">H3</button>
+                    <button type="button" data-cmd="formatBlock" data-val="P" title="Paragraph">¶</button>
+                    <span class="tb-sep"></span>
+                    <button type="button" data-cmd="insertUnorderedList" title="Bullet List">•≡</button>
+                    <button type="button" data-cmd="insertOrderedList" title="Numbered List">1.</button>
+                    <span class="tb-sep"></span>
+                    <button type="button" data-cmd="createLink" title="Insert Link">🔗</button>
+                    <button type="button" data-cmd="formatBlock" data-val="BLOCKQUOTE" title="Blockquote">❝</button>
+                    <button type="button" data-cmd="insertHorizontalRule" title="Horizontal Rule">—</button>
+                    <button type="button" data-cmd="removeFormat" title="Clear Formatting">⊘</button>
+                    <span class="tb-sep"></span>
+                    <button type="button" data-cmd="undo" title="Undo">↩</button>
+                    <button type="button" data-cmd="redo" title="Redo">↪</button>
+                    <button type="button" id="campaign-source-toggle" class="tb-source" title="Toggle HTML Source">&lt;/&gt; Source</button>
                   </div>
-                  <label class="btn-secondary btn-sm file-trigger">
-                    📷 Upload Image
-                    <input
-                      type="file"
-                      id="asset-file"
-                      accept="image/png,image/jpeg,image/gif,image/webp"
-                      hidden
-                    >
-                  </label>
+                  <div id="campaign-rich-editor" contenteditable="true" data-placeholder="Start writing your email content here…"></div>
+                  <textarea id="campaign-html-source" rows="14" placeholder="<p>Your email content here...</p>" style="display:none"></textarea>
                 </div>
-                <p class="asset-help">
-                  Uploaded images are stored once, inserted as placeholders in HTML, previewed with public URLs, and sent as real inline <code>cid:</code> attachments.
-                </p>
-                <div id="asset-list" class="asset-list">
-                  <div class="asset-empty">No inline images uploaded yet.</div>
-                </div>
-              </section>
 
-              <div class="form-group">
-                <div class="field-header">
-                  <label for="email-text">Plain Text Version</label>
-                  <span class="field-tip">Auto-synced from the editor above. Edit manually if needed.</span>
+                <div class="form-group">
+                  <div class="field-header">
+                    <label for="campaign-text">Plain Text Version</label>
+                    <span class="field-tip">Auto-synced from the editor above.</span>
+                  </div>
+                  <textarea id="campaign-text" rows="6" placeholder="Plain text version"></textarea>
                 </div>
-                <textarea id="email-text" rows="8" placeholder="Plain text version of your email"></textarea>
+              </div>
+            </div>
+            <div class="compose-preview">
+              <div class="preview-header">
+                <h3>Preview</h3>
+              </div>
+              <div class="email-preview-frame" id="campaign-preview"></div>
+            </div>
+          </div>
+
+          <!-- Campaign Test Send Modal -->
+          <div id="campaign-test-modal" class="modal hidden">
+            <div class="modal-content">
+              <div class="modal-header"><h3>📧 Test Send</h3><button class="modal-close" data-close="campaign-test-modal">✕</button></div>
+              <div class="modal-body">
+                <p>Send a test email to preview in your inbox.</p>
+                <form id="campaign-test-form">
+                  <input type="email" id="campaign-test-email" placeholder="Your email address" required>
+                  <button type="submit" class="btn-primary">Send Test</button>
+                </form>
               </div>
             </div>
           </div>
-          <div class="compose-preview">
-            <div class="preview-header">
-              <h3>Preview</h3>
-              <span class="preview-caption">Live preview resolves inline image placeholders automatically.</span>
-            </div>
-            <div class="email-preview-frame" id="email-preview"></div>
-          </div>
-        </div>
 
-        <!-- Test Send Modal -->
-        <div id="test-modal" class="modal hidden">
-          <div class="modal-content">
-            <div class="modal-header"><h3>📧 Test Send</h3><button class="modal-close" data-close="test-modal">✕</button></div>
-            <div class="modal-body">
-              <p>Send a test email to preview how it looks in your inbox. Subject will be prefixed with [TEST].</p>
-              <form id="test-form">
-                <input type="email" id="test-email" placeholder="Your email address" required>
-                <button type="submit" class="btn-primary">Send Test</button>
-              </form>
-            </div>
-          </div>
-        </div>
-
-        <!-- Send Confirmation Modal -->
-        <div id="send-modal" class="modal hidden">
-          <div class="modal-content">
-            <div class="modal-header"><h3>⚠️ Confirm Send</h3><button class="modal-close" data-close="send-modal">✕</button></div>
-            <div class="modal-body">
-              <p>This will send the email to the next batch of subscribers. Are you sure?</p>
-              <div class="modal-actions">
-                <button id="confirm-send" class="btn-primary btn-send">🚀 Yes, Send Now</button>
-                <button class="btn-secondary" data-close="send-modal">Cancel</button>
+          <!-- Campaign Send Confirmation -->
+          <div id="campaign-send-modal" class="modal hidden">
+            <div class="modal-content">
+              <div class="modal-header"><h3>⚠️ Confirm Send</h3><button class="modal-close" data-close="campaign-send-modal">✕</button></div>
+              <div class="modal-body">
+                <p id="campaign-send-confirm-text">This will send the campaign to subscribers. Are you sure?</p>
+                <div class="modal-actions">
+                  <button id="confirm-campaign-send" class="btn-primary btn-send">🚀 Yes, Send</button>
+                  <button class="btn-secondary" data-close="campaign-send-modal">Cancel</button>
+                </div>
               </div>
             </div>
           </div>

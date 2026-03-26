@@ -52,7 +52,54 @@ export function runMigrations(): void {
       reason TEXT,
       unsubscribed_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    -- Campaigns
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      subject TEXT NOT NULL DEFAULT '',
+      body_html TEXT NOT NULL DEFAULT '',
+      body_text TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'draft',
+      tag_filter TEXT,
+      sent_count INTEGER DEFAULT 0,
+      failed_count INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      sent_at DATETIME
+    );
+
+    -- Tags for audience segmentation
+    CREATE TABLE IF NOT EXISTS tags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      color TEXT DEFAULT '#6366f1',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS subscriber_tags (
+      subscriber_id INTEGER NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
+      tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (subscriber_id, tag_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_subscriber_tags_tag ON subscriber_tags(tag_id);
   `);
+
+  // Add campaign_id to send_logs if not present
+  const sendLogCols = db.pragma("table_info(send_logs)") as { name: string }[];
+  if (!sendLogCols.some((c) => c.name === "campaign_id")) {
+    db.exec(`ALTER TABLE send_logs ADD COLUMN campaign_id TEXT`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_send_logs_campaign ON send_logs(campaign_id)`);
+  }
+
+  // Add campaign_id to batches if not present
+  const batchCols = db.pragma("table_info(batches)") as { name: string }[];
+  if (!batchCols.some((c) => c.name === "campaign_id")) {
+    db.exec(`ALTER TABLE batches ADD COLUMN campaign_id TEXT`);
+  }
 
   logger.success("Database migrations completed");
 }
+
