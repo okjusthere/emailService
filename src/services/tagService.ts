@@ -84,3 +84,16 @@ export function getTagIdByName(name: string): number | undefined {
   const row = db.prepare("SELECT id FROM tags WHERE name = ?").get(name) as { id: number } | undefined;
   return row?.id;
 }
+
+/**
+ * Get or create a tag by name. Returns the tag ID.
+ */
+export function getOrCreateTag(name: string): number {
+  const trimmed = name.trim();
+  const existing = getTagIdByName(trimmed);
+  if (existing !== undefined) return existing;
+  const tag = createTag(trimmed);
+  if (tag) return tag.id;
+  // Race condition fallback: tag was created between check and insert
+  return getTagIdByName(trimmed)!;
+}

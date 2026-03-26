@@ -24,15 +24,37 @@ const WARMUP_SCHEDULE: Record<number, number> = {
 };
 
 /**
- * Get the effective daily send limit based on warmup schedule.
- * If SEND_START_DATE is not set, returns the configured dailySendCount.
- * If the domain has been active for 14+ days, returns dailySendCount.
+ * Default drip send settings.
+ * - chunkSize: how many emails per chunk
+ * - spreadHours: distribute chunks over this many hours
  */
-export function getEffectiveDailyLimit(): {
+const DEFAULT_CHUNK_SIZE = 50;
+const DEFAULT_SPREAD_HOURS = 4;
+
+export interface WarmupInfo {
+  /** Max emails allowed today */
   limit: number;
+  /** Current warmup day (1-14), or null if past warmup */
   warmupDay: number | null;
+  /** Whether still in warmup period */
   isWarmingUp: boolean;
-} {
+}
+
+export interface DripConfig {
+  /** Emails per chunk */
+  chunkSize: number;
+  /** Minutes between chunks */
+  intervalMinutes: number;
+  /** Max emails today (warmup-aware) */
+  dailyLimit: number;
+  /** Warmup info */
+  warmup: WarmupInfo;
+}
+
+/**
+ * Get the effective daily send limit based on warmup schedule.
+ */
+export function getEffectiveDailyLimit(): WarmupInfo {
   if (!config.sendStartDate) {
     return { limit: config.dailySendCount, warmupDay: null, isWarmingUp: false };
   }
@@ -58,5 +80,50 @@ export function getEffectiveDailyLimit(): {
     limit: effectiveLimit,
     warmupDay: daysSinceStart,
     isWarmingUp: true,
+  };
+}
+
+/**
+ * Get drip send configuration.
+ * Automatically calculates chunk interval based on warmup day and total volume.
+ *
+ * Strategy:
+ *  - During warmup: spread evenly over DEFAULT_SPREAD_HOURS hours
+ *  - After warmup: use a comfortable interval (higher throughput)
+ */
+export function getDripConfig(overrides?: {
+  chunkSize?: number;
+  intervalMinutes?: number;
+}): DripConfig {
+  const warmup = getEffectiveDailyLimit();
+  const chunkSize = overrides?.chunkSize || DEFAULT_CHUNK_SIZE;
+
+  if (overrides?.intervalMinutes) {
+    // User explicitly set interval
+    return {
+      chunkSize,
+      intervalMinutes: overrides.intervalMinutes,
+      dailyLimit: warmup.limit,
+      warmup,
+    };
+  }
+
+  // Auto-calculate: spread chunks evenly over SPREAD_HOURS
+  const totalChunks = Math.ceil(warmup.limit / chunkSize);
+  const spreadMinutes = DEFAULT_SPREAD_HOURS * 60;
+  const intervalMinutes = totalChunks > 1
+    ? Math.max(1, Math.floor(spreadMinutes / totalChunks))
+    : 1;
+
+  logger.info(
+    `Drip config: ${chunkSize} emails/chunk, ${intervalMinutes}min interval, ` +
+    `${totalChunks} chunks over ~${DEFAULT_SPREAD_HOURS}h (limit: ${warmup.limit}/day)`
+  );
+
+  return {
+    chunkSize,
+    intervalMinutes,
+    dailyLimit: warmup.limit,
+    warmup,
   };
 }

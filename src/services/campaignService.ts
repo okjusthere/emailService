@@ -1,6 +1,4 @@
 import { randomUUID } from "crypto";
-import fs from "fs";
-import path from "path";
 import { getDb } from "../db/connection.js";
 import { logger } from "../utils/logger.js";
 
@@ -28,30 +26,6 @@ export interface CampaignStats {
   complained: number;
 }
 
-const LEGACY_CONTENT_PATH = path.join(process.cwd(), "data", "email_content.json");
-
-/**
- * Auto-migrate legacy email_content.json into a campaign if no campaigns exist.
- */
-export function migrateLegacyContent(): void {
-  const db = getDb();
-  const count = (db.prepare("SELECT COUNT(*) as c FROM campaigns").get() as any).c;
-  if (count > 0) return;
-
-  try {
-    if (fs.existsSync(LEGACY_CONTENT_PATH)) {
-      const content = JSON.parse(fs.readFileSync(LEGACY_CONTENT_PATH, "utf-8"));
-      const id = randomUUID();
-      db.prepare(
-        `INSERT INTO campaigns (id, name, subject, body_html, body_text, status)
-         VALUES (?, ?, ?, ?, ?, 'draft')`
-      ).run(id, "Initial Email", content.subject || "", content.bodyHtml || "", content.bodyText || "");
-      logger.info("Migrated legacy email_content.json into campaign");
-    }
-  } catch (err) {
-    logger.warn("Could not migrate legacy email content", err);
-  }
-}
 
 export function listCampaigns(): Campaign[] {
   const db = getDb();

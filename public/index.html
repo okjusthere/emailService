@@ -102,10 +102,15 @@
             <div class="modal-header"><h3>Upload CSV</h3><button class="modal-close" data-close="upload-modal">✕</button></div>
             <div class="modal-body">
               <div class="upload-template-section">
-                <p>CSV must include an <strong>email</strong> column. An optional <strong>name</strong> column is also supported.</p>
+                <p>CSV must include an <strong>email</strong> column. Optional columns: <strong>name</strong>, <strong>tags</strong> (semicolon-separated, e.g. <code>VIP;Newsletter</code>).</p>
                 <button id="download-template" class="btn-secondary btn-sm" type="button">📋 Download Template</button>
               </div>
               <hr style="border:none;border-top:1px solid var(--border, #e2e8f0);margin:16px 0">
+              <div class="form-group" style="margin-bottom:12px">
+                <label for="batch-tags-input">🏷 Apply tags to all imported contacts (optional)</label>
+                <input type="text" id="batch-tags-input" placeholder="e.g. Batch-March, Event-2026 (comma separated)">
+                <span class="field-tip">These tags will be added to every contact in this upload, in addition to any per-row tags in the CSV.</span>
+              </div>
               <form id="upload-form">
                 <input type="file" id="csv-file" accept=".csv" required>
                 <button type="submit" class="btn-primary">Import</button>

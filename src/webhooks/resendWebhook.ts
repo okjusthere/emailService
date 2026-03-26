@@ -1,7 +1,6 @@
 import { getDb } from "../db/connection.js";
 import {
   updateSubscriberStatus,
-  findByResendEmailId,
 } from "../services/subscriberService.js";
 import { logger } from "../utils/logger.js";
 

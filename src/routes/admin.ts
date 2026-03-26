@@ -3,9 +3,8 @@ import multer from "multer";
 import fs from "fs";
 import { requireAuth } from "../utils/auth.js";
 import { config } from "../config.js";
-import { getStats, addSubscriber, bulkImport } from "../services/subscriberService.js";
-import { triggerManualSend } from "../services/scheduler.js";
-import { sendTestEmail, executeDailySend } from "../services/emailSender.js";
+import { getStats, addSubscriber, bulkImport, findByEmail } from "../services/subscriberService.js";
+import { sendTestEmail, type EmailContent } from "../services/emailSender.js";
 import { getEffectiveDailyLimit } from "../utils/warmup.js";
 import { buildRecruitmentEmail } from "../templates/recruitmentEmail.js";
 import { getDb } from "../db/connection.js";
@@ -20,20 +19,12 @@ import {
   resolveAssetPlaceholdersToPublicUrls,
 } from "../services/emailAssetService.js";
 import {
-  getEmailContent,
-  normalizeEmailContent,
-  saveEmailContent,
-  type EmailContent,
-} from "../services/emailContentService.js";
-import {
   listCampaigns,
   getCampaign,
   createCampaign,
   updateCampaign,
   deleteCampaign,
   duplicateCampaign,
-  markCampaignSending,
-  markCampaignSent,
   getCampaignStats,
 } from "../services/campaignService.js";
 import {
@@ -43,6 +34,7 @@ import {
   tagSubscribers,
   untagSubscribers,
   getSubscriberTags,
+  getOrCreateTag,
 } from "../services/tagService.js";
 
 const router = Router();
@@ -72,13 +64,6 @@ function getRequestBaseUrl(req: Request): string {
 function paramId(req: Request): string {
   const id = req.params.id;
   return Array.isArray(id) ? id[0] : id;
-}
-
-function buildEmailContentResponse(content: EmailContent) {
-  return {
-    ...content,
-    deliveryMode: hasEmbeddedAssets(content.bodyHtml) ? "inline" : "batch",
-  };
 }
 
 function buildPreviewEmail(content: EmailContent, baseUrl: string): string {
@@ -244,7 +229,7 @@ router.post("/campaigns/:id/test-send", async (req: Request, res: Response) => {
   res.status(500).json({ error: result.error });
 });
 
-router.post("/campaigns/:id/send", async (req: Request, res: Response) => {
+router.post("/campaigns/:id/send", (req: Request, res: Response) => {
   const campaign = getCampaign(paramId(req));
   if (!campaign) {
     res.status(404).json({ error: "Campaign not found" });
@@ -259,12 +244,6 @@ router.post("/campaigns/:id/send", async (req: Request, res: Response) => {
     return;
   }
 
-  const content: EmailContent = {
-    subject: campaign.subject,
-    bodyHtml: campaign.body_html,
-    bodyText: campaign.body_text,
-  };
-
   // Parse tag filter
   let tagIds: number[] | undefined;
   if (campaign.tag_filter) {
@@ -272,20 +251,37 @@ router.post("/campaigns/:id/send", async (req: Request, res: Response) => {
     if (tagIds.length === 0) tagIds = undefined;
   }
 
-  try {
-    markCampaignSending(campaign.id);
-    const result = await executeDailySend(content, campaign.id, tagIds);
-    markCampaignSent(campaign.id, result.totalSent, result.totalFailed);
-    res.json({
-      success: true,
-      batchId: result.batchId,
-      sent: result.totalSent,
-      failed: result.totalFailed,
-    });
-  } catch (error: any) {
-    markCampaignSent(campaign.id, 0, 0);
-    res.status(500).json({ error: error.message });
-  }
+  // Get warmup-aware drip config
+  const { getDripConfig } = require("../utils/warmup.js");
+  const drip = getDripConfig({
+    chunkSize: req.body?.chunkSize ? Number(req.body.chunkSize) : undefined,
+    intervalMinutes: req.body?.intervalMinutes ? Number(req.body.intervalMinutes) : undefined,
+  });
+
+  // Create a drip send job
+  const { createJob } = require("../services/jobService.js");
+  const job = createJob("campaign_send", {
+    campaignId: campaign.id,
+    tagIds: tagIds || null,
+    chunkSize: drip.chunkSize,
+    intervalMinutes: drip.intervalMinutes,
+  });
+
+  logger.info(
+    `Campaign send queued as job ${job.id} (drip: ${drip.chunkSize}/chunk, ${drip.intervalMinutes}min interval)`
+  );
+  res.status(202).json({
+    success: true,
+    jobId: job.id,
+    message: "Campaign send queued",
+    drip: {
+      chunkSize: drip.chunkSize,
+      intervalMinutes: drip.intervalMinutes,
+      dailyLimit: drip.dailyLimit,
+      isWarmingUp: drip.warmup.isWarmingUp,
+      warmupDay: drip.warmup.warmupDay,
+    },
+  });
 });
 
 router.post("/campaigns/:id/preview", (req: Request, res: Response) => {
@@ -541,13 +537,14 @@ router.post(
       const header = lines[0].toLowerCase().split(",").map((part) => part.trim());
       const emailIndex = header.indexOf("email");
       const nameIndex = header.indexOf("name");
+      const tagsIndex = header.indexOf("tags");
 
       if (emailIndex === -1) {
         res.status(400).json({ error: 'CSV must have an "email" column' });
         return;
       }
 
-      const users: { email: string; name?: string }[] = [];
+      const users: { email: string; name?: string; tags?: string[] }[] = [];
 
       for (let index = 1; index < lines.length; index++) {
         const columns = lines[index]
@@ -559,18 +556,87 @@ router.post(
           continue;
         }
 
+        // Parse per-row tags (semicolon separated)
+        let rowTags: string[] = [];
+        if (tagsIndex >= 0 && columns[tagsIndex]) {
+          rowTags = columns[tagsIndex]
+            .split(";")
+            .map((t) => t.trim())
+            .filter(Boolean);
+        }
+
         users.push({
           email: email.toLowerCase(),
           name: nameIndex >= 0 ? columns[nameIndex] || undefined : undefined,
+          tags: rowTags.length > 0 ? rowTags : undefined,
         });
       }
 
       const result = bulkImport(users);
+
+      // Parse batch tags from form field (comma separated)
+      const batchTagsRaw = (req.body?.batchTags as string) || "";
+      const batchTagNames = batchTagsRaw
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+
+      // Apply tags to imported subscribers
+      let taggedCount = 0;
+      let tagsCreated = 0;
+      const tagIdCache = new Map<string, number>();
+
+      const resolveTagId = (tagName: string): number => {
+        if (tagIdCache.has(tagName)) return tagIdCache.get(tagName)!;
+        const id = getOrCreateTag(tagName);
+        tagIdCache.set(tagName, id);
+        return id;
+      };
+
+      // Count how many tags are truly new
+      const allTagNames = new Set<string>();
+      for (const u of users) {
+        u.tags?.forEach((t) => allTagNames.add(t));
+      }
+      batchTagNames.forEach((t) => allTagNames.add(t));
+
+      // Pre-resolve all tag IDs (creates missing ones)
+      for (const tagName of allTagNames) {
+        resolveTagId(tagName);
+      }
+      tagsCreated = tagIdCache.size;
+
+      // Apply per-row tags
+      for (const u of users) {
+        if (!u.tags || u.tags.length === 0) continue;
+        const sub = findByEmail(u.email);
+        if (!sub) continue;
+        for (const tagName of u.tags) {
+          const tagId = resolveTagId(tagName);
+          taggedCount += tagSubscribers([sub.id], tagId);
+        }
+      }
+
+      // Apply batch tags to ALL imported users
+      if (batchTagNames.length > 0) {
+        const allImportedIds: number[] = [];
+        for (const u of users) {
+          const sub = findByEmail(u.email);
+          if (sub) allImportedIds.push(sub.id);
+        }
+        for (const tagName of batchTagNames) {
+          const tagId = resolveTagId(tagName);
+          taggedCount += tagSubscribers(allImportedIds, tagId);
+        }
+      }
+
       res.json({
         success: true,
         imported: result.imported,
         skipped: result.skipped,
         total: users.length,
+        taggedCount,
+        tagsCreated,
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -632,70 +698,27 @@ router.delete("/email-assets/:id", (req: Request, res: Response) => {
   res.json({ success: true });
 });
 
-// ── Legacy email content (backward compat) ───────
-router.get("/email-content", (_req: Request, res: Response) => {
-  res.json(buildEmailContentResponse(getEmailContent()));
+
+// ── Jobs ─────────────────────────────────
+router.get("/jobs", (req: Request, res: Response) => {
+  const { listJobs } = require("../services/jobService.js");
+  const status = typeof req.query.status === "string" ? req.query.status : undefined;
+  res.json({ jobs: listJobs({ status, limit: 50 }) });
 });
 
-router.put("/email-content", (req: Request, res: Response) => {
-  const { subject, bodyHtml, bodyText } = req.body;
-
-  if (!subject || !bodyHtml || !bodyText) {
-    res.status(400).json({ error: "subject, bodyHtml, bodyText are required" });
+router.get("/jobs/:id", (req: Request, res: Response) => {
+  const { getJob } = require("../services/jobService.js");
+  const job = getJob(paramId(req));
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
     return;
   }
-
-  const savedContent = saveEmailContent({ subject, bodyHtml, bodyText });
-  logger.info("Email content updated via admin");
-  res.json({ success: true, content: buildEmailContentResponse(savedContent) });
-});
-
-router.get("/email-preview", (req: Request, res: Response) => {
-  res.send(buildPreviewEmail(getEmailContent(), getRequestBaseUrl(req)));
-});
-
-router.post("/email-preview", (req: Request, res: Response) => {
-  const { subject, bodyHtml, bodyText } = req.body;
-
-  if (!subject || !bodyHtml) {
-    res.status(400).json({ error: "subject and bodyHtml are required" });
-    return;
-  }
-
-  const content = normalizeEmailContent({
-    subject,
-    bodyHtml,
-    bodyText: bodyText || "",
+  // Parse JSON fields for convenience
+  res.json({
+    ...job,
+    payload: JSON.parse(job.payload || "{}"),
+    result: job.result ? JSON.parse(job.result) : null,
   });
-
-  res.send(buildPreviewEmail(content, getRequestBaseUrl(req)));
-});
-
-router.post("/test-send", async (req: Request, res: Response) => {
-  const { email } = req.body;
-
-  if (!email) {
-    res.status(400).json({ error: "email is required" });
-    return;
-  }
-
-  const result = await sendTestEmail(email, getEmailContent());
-
-  if (result.success) {
-    res.json({ success: true, message: `Test email sent to ${email}` });
-    return;
-  }
-
-  res.status(500).json({ error: result.error });
-});
-
-router.post("/send-now", async (_req: Request, res: Response) => {
-  try {
-    await triggerManualSend(getEmailContent());
-    res.json({ success: true, message: "Send triggered" });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
 });
 
 router.get("/batches", (_req: Request, res: Response) => {

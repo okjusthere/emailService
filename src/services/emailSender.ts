@@ -22,7 +22,12 @@ import {
   hasEmbeddedAssets,
   resolveAssetPlaceholdersToInlineAttachments,
 } from "./emailAssetService.js";
-import { type EmailContent } from "./emailContentService.js";
+
+export interface EmailContent {
+  subject: string;
+  bodyHtml: string;
+  bodyText: string;
+}
 
 let resendClient: Resend | null = null;
 
@@ -318,80 +323,67 @@ async function sendChunk(
   return sendBatchEmails(subscribers, content, batchId, campaignId);
 }
 
-export async function executeDailySend(content: EmailContent, campaignId?: string, tagIds?: number[]): Promise<{
-  batchId: string;
-  totalSent: number;
-  totalFailed: number;
-}> {
-  const { getEffectiveDailyLimit } = await import("../utils/warmup.js");
-  const warmup = getEffectiveDailyLimit();
-  const effectiveLimit = Math.min(warmup.limit, config.dailySendCount);
 
-  const batchId = randomUUID();
+/**
+ * Send a single chunk of a campaign (for drip sending).
+ * Returns the number of remaining unsent subscribers so the caller knows
+ * whether to schedule another chunk.
+ */
+export async function sendCampaignChunk(
+  content: EmailContent,
+  campaignId: string,
+  chunkSize: number,
+  tagIds?: number[]
+): Promise<{
+  batchId: string;
+  sent: number;
+  failed: number;
+  remaining: number;
+}> {
   const db = getDb();
-  const subscribers = getNextBatch(effectiveLimit, tagIds);
+  const subscribers = getNextBatch(chunkSize, tagIds);
 
   if (subscribers.length === 0) {
-    logger.warn("No active subscribers to send to (all sent today or none active)");
-    return { batchId, totalSent: 0, totalFailed: 0 };
+    return { batchId: "", sent: 0, failed: 0, remaining: 0 };
   }
 
+  const batchId = randomUUID();
   const preparedContent = prepareEmailContent(content);
 
   logger.info(
-    `Starting daily send: ${subscribers.length} subscribers (limit: ${effectiveLimit}${warmup.isWarmingUp ? `, warmup day ${warmup.warmupDay}` : ""}), batch ID: ${batchId}`
+    `Drip chunk: sending ${subscribers.length} emails (campaign ${campaignId}), batch ${batchId}`
   );
 
   db.prepare(
     `INSERT INTO batches (id, total_count, status, started_at, campaign_id) VALUES (?, ?, 'in_progress', datetime('now'), ?)`
-  ).run(batchId, subscribers.length, campaignId || null);
-
-  let totalSent = 0;
-  let totalFailed = 0;
-  const chunks: Subscriber[][] = [];
-
-  for (let index = 0; index < subscribers.length; index += config.batchSize) {
-    chunks.push(subscribers.slice(index, index + config.batchSize));
-  }
+  ).run(batchId, subscribers.length, campaignId);
 
   try {
-    for (let index = 0; index < chunks.length; index++) {
-      const chunk = chunks[index];
-      const result = await sendChunk(chunk, preparedContent, batchId, campaignId);
-      totalSent += result.sent;
-      totalFailed += result.failed;
-
-      if (index < chunks.length - 1) {
-        await sleep(preparedContent.usesEmbeddedAssets ? 1000 : 500);
-      }
-
-      if ((index + 1) % 10 === 0) {
-        logger.info(
-          `Progress: ${index + 1}/${chunks.length} chunks processed (${totalSent} sent, ${totalFailed} failed)`
-        );
-      }
-    }
+    const result = await sendChunk(subscribers, preparedContent, batchId, campaignId);
 
     db.prepare(
       `UPDATE batches SET sent_count = ?, failed_count = ?, status = 'completed', completed_at = datetime('now') WHERE id = ?`
-    ).run(totalSent, totalFailed, batchId);
+    ).run(result.sent, result.failed, batchId);
 
-    logger.success(
-      `Daily send complete! Batch ${batchId}: ${totalSent} sent, ${totalFailed} failed`
-    );
+    // Count remaining active subscribers not yet sent to today
+    const remaining = getNextBatch(1, tagIds).length > 0 ? -1 : 0; // -1 = more exist
+    const actualRemaining = remaining === 0 ? 0
+      : (db.prepare(
+          `SELECT COUNT(*) as c FROM subscribers
+           WHERE status = 'active'
+             AND (last_sent_at IS NULL OR date(last_sent_at) < date('now'))`
+        ).get() as any).c;
 
-    return { batchId, totalSent, totalFailed };
+    return {
+      batchId,
+      sent: result.sent,
+      failed: result.failed,
+      remaining: actualRemaining,
+    };
   } catch (error) {
-    const remaining = Math.max(
-      subscribers.length - totalSent - totalFailed,
-      0
-    );
-    totalFailed += remaining;
-
     db.prepare(
-      `UPDATE batches SET sent_count = ?, failed_count = ?, status = 'failed', completed_at = datetime('now') WHERE id = ?`
-    ).run(totalSent, totalFailed, batchId);
-
+      `UPDATE batches SET sent_count = 0, failed_count = ?, status = 'failed', completed_at = datetime('now') WHERE id = ?`
+    ).run(subscribers.length, batchId);
     throw error;
   }
 }

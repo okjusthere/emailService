@@ -85,6 +85,24 @@ export function runMigrations(): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_subscriber_tags_tag ON subscriber_tags(tag_id);
+
+    -- Job queue
+    CREATE TABLE IF NOT EXISTS jobs (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'pending',
+      result TEXT,
+      error TEXT,
+      attempts INTEGER DEFAULT 0,
+      max_attempts INTEGER DEFAULT 3,
+      run_after DATETIME DEFAULT CURRENT_TIMESTAMP,
+      started_at DATETIME,
+      completed_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_jobs_status_run ON jobs(status, run_after);
   `);
 
   // Add campaign_id to send_logs if not present
@@ -98,6 +116,16 @@ export function runMigrations(): void {
   const batchCols = db.pragma("table_info(batches)") as { name: string }[];
   if (!batchCols.some((c) => c.name === "campaign_id")) {
     db.exec(`ALTER TABLE batches ADD COLUMN campaign_id TEXT`);
+  }
+
+  // Add confirmation_token + confirmed_at for Double Opt-in
+  const subscriberCols = db.pragma("table_info(subscribers)") as { name: string }[];
+  if (!subscriberCols.some((c) => c.name === "confirmation_token")) {
+    db.exec(`ALTER TABLE subscribers ADD COLUMN confirmation_token TEXT`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_subscribers_confirm_token ON subscribers(confirmation_token)`);
+  }
+  if (!subscriberCols.some((c) => c.name === "confirmed_at")) {
+    db.exec(`ALTER TABLE subscribers ADD COLUMN confirmed_at DATETIME`);
   }
 
   logger.success("Database migrations completed");

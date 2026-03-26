@@ -1,76 +1,171 @@
-import cron from "node-cron";
-import { config } from "../config.js";
-import { executeDailySend } from "./emailSender.js";
-import { getEmailContent, type EmailContent } from "./emailContentService.js";
-import { getStats } from "./subscriberService.js";
+import { sendCampaignChunk, type EmailContent } from "./emailSender.js";
+import {
+  createJob,
+  claimNextJob,
+  completeJob,
+  failJob,
+  recoverStuckJobs,
+  type Job,
+} from "./jobService.js";
+import {
+  getCampaign,
+  markCampaignSending,
+  markCampaignSent,
+} from "./campaignService.js";
+import { getDb } from "../db/connection.js";
 import { logger } from "../utils/logger.js";
 
-let scheduledTask: cron.ScheduledTask | null = null;
+let workerInterval: ReturnType<typeof setInterval> | null = null;
+const POLL_INTERVAL_MS = 2000;
 
 /**
- * Start the cron scheduler for daily email sends
+ * Process a single job based on its type.
  */
-export function startScheduler(): void {
-  // Skip if cron is not configured or explicitly disabled
-  if (!config.sendCron || config.sendCron === "disabled") {
-    logger.info("Scheduler disabled — use /admin to send manually");
-    return;
+async function processJob(job: Job): Promise<void> {
+  const payload = JSON.parse(job.payload);
+  logger.info(`Processing job ${job.id} (type: ${job.type}, attempt ${job.attempts})`);
+
+  switch (job.type) {
+    case "campaign_send": {
+      const { campaignId, tagIds, chunkSize, intervalMinutes, totalSent = 0, totalFailed = 0, chunkIndex = 1 } = payload;
+      const campaign = getCampaign(campaignId);
+
+      if (!campaign) {
+        failJob(job.id, `Campaign ${campaignId} not found`);
+        return;
+      }
+
+      const content: EmailContent = {
+        subject: campaign.subject,
+        bodyHtml: campaign.body_html,
+        bodyText: campaign.body_text,
+      };
+
+      // Ensure campaign is marked as sending
+      if (campaign.status !== "sending") {
+        markCampaignSending(campaign.id);
+      }
+
+      const result = await sendCampaignChunk(content, campaignId, chunkSize || 50, tagIds || undefined);
+      const newTotalSent = totalSent + result.sent;
+      const newTotalFailed = totalFailed + result.failed;
+
+      if (result.remaining > 0) {
+        // More subscribers to send — chain next chunk job with delay
+        const delay = (intervalMinutes || 10) * 60 * 1000;
+        const runAfter = new Date(Date.now() + delay);
+
+        createJob("campaign_send", {
+          campaignId,
+          tagIds,
+          chunkSize,
+          intervalMinutes,
+          totalSent: newTotalSent,
+          totalFailed: newTotalFailed,
+          chunkIndex: chunkIndex + 1,
+        }, { runAfter });
+
+        // Complete this chunk job with intermediate result
+        completeJob(job.id, {
+          chunkIndex,
+          sent: result.sent,
+          failed: result.failed,
+          totalSent: newTotalSent,
+          totalFailed: newTotalFailed,
+          remaining: result.remaining,
+          status: "dripping",
+          nextChunkAt: runAfter.toISOString(),
+        });
+
+        // Update campaign progress (partial)
+        const db = getDb();
+        db.prepare(
+          `UPDATE campaigns SET sent_count = ?, failed_count = ?, updated_at = datetime('now') WHERE id = ?`
+        ).run(newTotalSent, newTotalFailed, campaignId);
+
+        logger.info(
+          `Drip chunk ${chunkIndex} done: +${result.sent} sent, ${result.remaining} remaining. ` +
+          `Next chunk in ${intervalMinutes}min`
+        );
+      } else {
+        // All done — mark campaign as sent
+        markCampaignSent(campaignId, newTotalSent, newTotalFailed);
+        completeJob(job.id, {
+          chunkIndex,
+          sent: result.sent,
+          failed: result.failed,
+          totalSent: newTotalSent,
+          totalFailed: newTotalFailed,
+          remaining: 0,
+          status: "complete",
+        });
+
+        logger.success(
+          `Campaign ${campaignId} drip-send complete! Total: ${newTotalSent} sent, ${newTotalFailed} failed (${chunkIndex} chunks)`
+        );
+      }
+      break;
+    }
+
+    case "test_send": {
+      const { email, content } = payload;
+      const { sendTestEmail } = await import("./emailSender.js");
+      const result = await sendTestEmail(email, content);
+
+      if (result.success) {
+        completeJob(job.id, { success: true });
+      } else {
+        throw new Error(result.error || "Test send failed");
+      }
+      break;
+    }
+
+    default:
+      failJob(job.id, `Unknown job type: ${job.type}`);
   }
+}
 
-  if (scheduledTask) {
-    logger.warn("Scheduler is already running");
-    return;
-  }
-
-  logger.info(`Scheduling daily send: cron = "${config.sendCron}"`);
-
-  scheduledTask = cron.schedule(config.sendCron, async () => {
-    logger.info("=== Daily send triggered ===");
-    const stats = getStats();
-    logger.info("Subscriber stats before send:", stats);
+/**
+ * Single tick of the worker loop.
+ */
+async function tick(): Promise<void> {
+  try {
+    const job = claimNextJob();
+    if (!job) return;
 
     try {
-      const content = getEmailContent();
-      const result = await executeDailySend(content);
-      logger.success(
-        `Daily send finished. Batch: ${result.batchId}, Sent: ${result.totalSent}, Failed: ${result.totalFailed}`
-      );
+      await processJob(job);
     } catch (err: any) {
-      logger.error(`Daily send failed: ${err.message}`, err);
+      failJob(job.id, err.message || "Unknown error");
     }
-  });
-
-  logger.success("Scheduler started");
-}
-
-/**
- * Stop the scheduler
- */
-export function stopScheduler(): void {
-  if (scheduledTask) {
-    scheduledTask.stop();
-    scheduledTask = null;
-    logger.info("Scheduler stopped");
+  } catch (err: any) {
+    logger.error(`Job worker tick error: ${err.message}`);
   }
 }
 
 /**
- * Trigger an immediate send (for testing or manual trigger)
+ * Start the job worker that polls for pending jobs.
  */
-export async function triggerManualSend(
-  content?: EmailContent
-): Promise<void> {
-  logger.info("=== Manual send triggered ===");
-  const stats = getStats();
-  logger.info("Subscriber stats:", stats);
+export function startWorker(): void {
+  if (workerInterval) {
+    logger.warn("Job worker is already running");
+    return;
+  }
 
-  try {
-    const emailContent = content || getEmailContent();
-    const result = await executeDailySend(emailContent);
-    logger.success(
-      `Manual send finished. Batch: ${result.batchId}, Sent: ${result.totalSent}, Failed: ${result.totalFailed}`
-    );
-  } catch (err: any) {
-    logger.error(`Manual send failed: ${err.message}`, err);
+  // Recover any jobs stuck in 'running' from a previous crash
+  recoverStuckJobs();
+
+  workerInterval = setInterval(tick, POLL_INTERVAL_MS);
+  logger.success(`Job worker started (polling every ${POLL_INTERVAL_MS}ms)`);
+}
+
+/**
+ * Stop the job worker.
+ */
+export function stopWorker(): void {
+  if (workerInterval) {
+    clearInterval(workerInterval);
+    workerInterval = null;
+    logger.info("Job worker stopped");
   }
 }

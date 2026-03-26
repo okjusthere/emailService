@@ -3,29 +3,9 @@ let apiSecret = localStorage.getItem("apiSecret") || "";
 let currentPage = "dashboard";
 let subscriberPage = 1;
 let selectedIds = new Set();
-let emailAssets = [];
-let isSourceMode = false;
 let allTags = [];
 let currentCampaignId = null;
 let campaignSourceMode = false;
-
-const INLINE_ASSET_PATTERN = /\{\{asset:[a-z0-9-]+\}\}/gi;
-const HTML_SNIPPETS = {
-  intro: `<p>We're reaching out because we're expanding our team and looking for ambitious real estate professionals who want more momentum, more support, and a sharper brand behind them.</p>`,
-  "feature-list": `<p><strong>Why top producers join us:</strong></p>
-<ul>
-  <li>Sharper lead flow and marketing systems</li>
-  <li>Hands-on operational support that removes friction</li>
-  <li>A culture built around speed, visibility, and growth</li>
-</ul>`,
-  cta: `<p style="margin: 28px 0;">
-  <a href="mailto:hello@example.com" style="display:inline-block;padding:14px 22px;background:#111827;color:#ffffff;text-decoration:none;border-radius:999px;font-weight:700;">
-    Reply to Start the Conversation
-  </a>
-</p>`,
-  divider: `<hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0;">`,
-  signature: `<p>Best regards,<br><strong>The Recruiting Team</strong></p>`,
-};
 
 // ── API Helper ───────────────────────────
 async function api(path, options = {}) {
@@ -83,7 +63,6 @@ function navigateTo(page) {
   if (page === "dashboard") loadDashboard();
   else if (page === "subscribers") { loadTags(); loadSubscribers(); }
   else if (page === "campaigns") { loadTags(); loadCampaignList(); }
-  else if (page === "compose") loadEmailContent();
   else if (page === "history") loadHistory();
 }
 
@@ -318,7 +297,7 @@ document.getElementById("apply-tag-btn")?.addEventListener("click", async () => 
 
 // ── CSV Template Download ────────────────
 document.getElementById("download-template")?.addEventListener("click", () => {
-  const template = "email,name\njohn@example.com,John Doe\njane@example.com,Jane Smith\n";
+  const template = "email,name,tags\njohn@example.com,John Doe,VIP;Newsletter\njane@example.com,Jane Smith,Newsletter\n";
   const blob = new Blob([template], { type: "text/csv" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -335,15 +314,22 @@ document.getElementById("upload-form")?.addEventListener("submit", async (e) => 
   if (!file) return;
   const formData = new FormData();
   formData.append("csv", file);
+  // Append batch tags if specified
+  const batchTags = (document.getElementById("batch-tags-input")?.value || "").trim();
+  if (batchTags) formData.append("batchTags", batchTags);
   try {
     const res = await api("/subscribers/upload", { method: "POST", body: formData });
     const data = await res.json();
     if (data.success) {
       document.getElementById("upload-result").classList.remove("hidden");
-      document.getElementById("upload-result").innerHTML =
-        `<p style="color: var(--green)">✅ Imported: ${data.imported}, Skipped: ${data.skipped}</p>`;
+      let resultHtml = `<p style="color: var(--green)">✅ Imported: ${data.imported}, Skipped: ${data.skipped}</p>`;
+      if (data.taggedCount > 0) {
+        resultHtml += `<p style="color: var(--green)">🏷 Tagged: ${data.taggedCount} assignments (${data.tagsCreated} tag${data.tagsCreated !== 1 ? 's' : ''} used)</p>`;
+      }
+      document.getElementById("upload-result").innerHTML = resultHtml;
       toast(`Imported ${data.imported} subscribers`);
       loadSubscribers();
+      loadTags();
     } else {
       toast(data.error || "Upload failed", "error");
     }
@@ -386,495 +372,7 @@ document.getElementById("add-form")?.addEventListener("submit", async (e) => {
   } catch { toast("Failed to add subscriber", "error"); }
 });
 
-// ── Email Compose ────────────────────────
-async function loadEmailContent() {
-  try {
-    const [contentRes, assetRes] = await Promise.all([
-      api("/email-content"),
-      api("/email-assets"),
-    ]);
-    const content = await contentRes.json();
-    const assetData = await assetRes.json();
-    emailAssets = assetData.assets || [];
-    applyEmailContent(content);
-    renderAssetList();
-    updatePreview();
-  } catch { toast("Failed to load email content", "error"); }
-}
 
-function getRichEditorHtml() {
-  if (isSourceMode) return document.getElementById("email-html-source").value;
-  return document.getElementById("rich-editor").innerHTML;
-}
-
-function getCurrentEmailContent() {
-  return {
-    subject: document.getElementById("email-subject").value,
-    bodyHtml: getRichEditorHtml(),
-    bodyText: document.getElementById("email-text").value,
-  };
-}
-
-function applyEmailContent(content) {
-  document.getElementById("email-subject").value = content.subject || "";
-  const html = content.bodyHtml || "";
-  document.getElementById("rich-editor").innerHTML = html;
-  document.getElementById("email-html-source").value = html;
-  document.getElementById("email-text").value = content.bodyText || "";
-  updateDeliveryModeBanner(html);
-}
-
-function updateDeliveryModeBanner(html) {
-  if (html === undefined) html = getRichEditorHtml();
-  const banner = document.getElementById("delivery-mode-banner");
-  banner.classList.remove("hidden");
-  banner.textContent = hasInlineAssets(html)
-    ? "Inline images detected. Preview uses hosted URLs, while live sends will automatically switch to throttled single-send mode with real cid attachments."
-    : "No inline image placeholders detected. Sends will stay on the faster Resend batch path.";
-}
-
-function renderAssetList() {
-  const container = document.getElementById("asset-list");
-  if (!emailAssets.length) {
-    container.innerHTML = '<div class="asset-empty">No inline images uploaded yet.</div>';
-    return;
-  }
-
-  container.innerHTML = emailAssets.map((asset) => `
-    <article class="asset-card">
-      <img src="${asset.publicUrl}" alt="${escapeAttribute(asset.originalName)}">
-      <div class="asset-card-body">
-        <div class="asset-name">${escapeHtml(asset.originalName)}</div>
-        <div class="asset-meta">${formatBytes(asset.size)} · ${asset.mimeType}</div>
-        <div class="asset-placeholder"><code>${escapeHtml(asset.placeholder)}</code></div>
-        <div class="asset-actions">
-          <button type="button" class="btn-secondary btn-sm" onclick="insertInlineAsset('${asset.id}')">Insert</button>
-          <button type="button" class="btn-secondary btn-sm" onclick="copyAssetUrl('${asset.id}')">Copy URL</button>
-          <button type="button" class="btn-danger btn-sm" onclick="removeInlineAsset('${asset.id}')">Delete</button>
-        </div>
-      </div>
-    </article>
-  `).join("");
-}
-
-function createInlineImageSnippet(asset) {
-  return `<img src="${asset.placeholder}" alt="${escapeAttribute(stripFileExtension(asset.originalName))}" style="display:block;max-width:480px;width:auto;height:auto;margin:16px 0;border:0;border-radius:12px;">`;
-}
-
-function insertInlineAsset(assetId) {
-  const asset = emailAssets.find((item) => item.id === assetId);
-  if (!asset) {
-    toast("Image asset not found", "error");
-    return;
-  }
-  insertHtmlAtCursor(createInlineImageSnippet(asset));
-  toast(`Inserted ${asset.originalName}`);
-}
-
-async function copyAssetUrl(assetId) {
-  const asset = emailAssets.find((item) => item.id === assetId);
-  if (!asset) {
-    toast("Image asset not found", "error");
-    return;
-  }
-
-  try {
-    await navigator.clipboard.writeText(asset.publicUrl);
-    toast("Image URL copied");
-  } catch {
-    toast("Failed to copy URL", "error");
-  }
-}
-
-async function removeInlineAsset(assetId) {
-  const asset = emailAssets.find((item) => item.id === assetId);
-  if (!asset) return;
-  if (!confirm(`Delete ${asset.originalName}? Existing templates using this image will break until you replace it.`)) return;
-
-  try {
-    const res = await api(`/email-assets/${assetId}`, { method: "DELETE" });
-    const data = await res.json();
-    if (!res.ok || !data.success) throw new Error(data.error || "Delete failed");
-    emailAssets = emailAssets.filter((item) => item.id !== assetId);
-    renderAssetList();
-    updatePreview();
-    toast("Image deleted");
-  } catch (err) {
-    toast(err.message || "Failed to delete image", "error");
-  }
-}
-
-function insertHtmlSnippet(snippetKey) {
-  const snippet = HTML_SNIPPETS[snippetKey];
-  if (!snippet) return;
-  insertHtmlAtCursor(snippet);
-}
-
-function insertHtmlAtCursor(snippet) {
-  if (isSourceMode) {
-    // Fallback: insert into the source textarea
-    const textarea = document.getElementById("email-html-source");
-    const start = textarea.selectionStart ?? textarea.value.length;
-    const end = textarea.selectionEnd ?? textarea.value.length;
-    textarea.setRangeText(snippet, start, end, "end");
-    textarea.focus();
-  } else {
-    const editor = document.getElementById("rich-editor");
-    editor.focus();
-    document.execCommand("insertHTML", false, snippet);
-  }
-  onEditorInput();
-}
-
-function sanitizePreviewHtml(html) {
-  return html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe>/gi, "")
-    .replace(/\son[a-z-]+\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, "");
-}
-
-function resolveInlineAssetUrls(html) {
-  return html.replace(INLINE_ASSET_PATTERN, (placeholder) => {
-    const asset = emailAssets.find((item) => item.placeholder === placeholder);
-    return asset ? asset.publicUrl : "";
-  });
-}
-
-function updatePreview() {
-  const subject = document.getElementById("email-subject").value;
-  const rawHtml = getRichEditorHtml();
-  const html = sanitizePreviewHtml(resolveInlineAssetUrls(rawHtml));
-  const previewContainer = document.getElementById("email-preview");
-  const previewHtml = `<!DOCTYPE html><html><head><style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; margin: 0; color: #333; font-size: 14px; line-height: 1.6; background: #f8fafc; }
-    h2 { color: #1a365d; margin-top: 0; font-size: 24px; }
-    img { max-width: 100%; height: auto; display: block; }
-    a { color: #2563eb; }
-  </style></head><body><h2>${escapeHtml(subject)}</h2><hr style="border:none;border-top:1px solid #eee;margin:16px 0">${html}</body></html>`;
-  let iframe = previewContainer.querySelector("iframe");
-  if (!iframe) {
-    iframe = document.createElement("iframe");
-    iframe.setAttribute("sandbox", "allow-same-origin");
-    iframe.setAttribute("referrerpolicy", "no-referrer");
-    previewContainer.innerHTML = "";
-    previewContainer.appendChild(iframe);
-  }
-  iframe.srcdoc = previewHtml;
-  updateDeliveryModeBanner(rawHtml);
-}
-
-function hasInlineAssets(html) {
-  return /\{\{asset:[a-z0-9-]+\}\}/i.test(html);
-}
-
-function stripFileExtension(name) {
-  return name.replace(/\.[^.]+$/, "");
-}
-
-function escapeAttribute(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  }[char]));
-}
-
-function formatBytes(bytes) {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${bytes} B`;
-}
-
-function htmlToPlainText(html) {
-  const withBreaks = html
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|section|article|li|ul|ol|h[1-6]|tr|table)>/gi, "\n");
-  const temp = document.createElement("div");
-  temp.innerHTML = sanitizePreviewHtml(resolveInlineAssetUrls(withBreaks));
-  return temp.textContent
-    .replace(/\u00a0/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function syncPlainTextFromHtml() {
-  document.getElementById("email-text").value = htmlToPlainText(getRichEditorHtml());
-}
-
-// Debounced handler for editor input
-let _editorInputTimer = null;
-function onEditorInput() {
-  updatePreview();
-  clearTimeout(_editorInputTimer);
-  _editorInputTimer = setTimeout(syncPlainTextFromHtml, 400);
-}
-
-// ── Rich Text Toolbar ────────────────────
-function initRichToolbar() {
-  const toolbar = document.getElementById("rich-toolbar");
-  if (!toolbar) return;
-
-  // Command buttons
-  toolbar.querySelectorAll("button[data-cmd]").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.preventDefault();
-      const cmd = btn.dataset.cmd;
-      const val = btn.dataset.val || null;
-
-      if (cmd === "createLink") {
-        const url = prompt("Enter URL:", "https://");
-        if (!url) return;
-        document.getElementById("rich-editor").focus();
-        document.execCommand(cmd, false, url);
-      } else if (cmd === "formatBlock" && val) {
-        document.getElementById("rich-editor").focus();
-        document.execCommand(cmd, false, `<${val}>`);
-      } else {
-        document.getElementById("rich-editor").focus();
-        document.execCommand(cmd, false, val);
-      }
-      onEditorInput();
-      updateToolbarState();
-    });
-  });
-
-  // Source toggle
-  document.getElementById("source-toggle")?.addEventListener("click", toggleSourceMode);
-
-  // Editor input
-  document.getElementById("rich-editor")?.addEventListener("input", onEditorInput);
-
-  // Track selection for active button states
-  document.addEventListener("selectionchange", () => {
-    if (!document.getElementById("rich-editor")?.contains(document.activeElement === document.getElementById("rich-editor") ? window.getSelection()?.anchorNode : null)) return;
-    updateToolbarState();
-  });
-}
-
-function updateToolbarState() {
-  const toolbar = document.getElementById("rich-toolbar");
-  if (!toolbar) return;
-  const toggleCmds = ["bold", "italic", "underline", "strikeThrough", "insertUnorderedList", "insertOrderedList"];
-  toolbar.querySelectorAll("button[data-cmd]").forEach((btn) => {
-    const cmd = btn.dataset.cmd;
-    if (toggleCmds.includes(cmd)) {
-      btn.classList.toggle("active", document.queryCommandState(cmd));
-    }
-  });
-}
-
-function toggleSourceMode() {
-  const editor = document.getElementById("rich-editor");
-  const source = document.getElementById("email-html-source");
-  const btn = document.getElementById("source-toggle");
-  if (!editor || !source) return;
-
-  isSourceMode = !isSourceMode;
-  btn?.classList.toggle("active", isSourceMode);
-
-  if (isSourceMode) {
-    // Visual → Source
-    source.value = editor.innerHTML;
-    editor.style.display = "none";
-    source.style.display = "block";
-    source.focus();
-  } else {
-    // Source → Visual
-    editor.innerHTML = source.value;
-    source.style.display = "none";
-    editor.style.display = "";
-    editor.focus();
-    onEditorInput();
-  }
-}
-
-// ── Image Resize Popover ─────────────────
-let _activeImg = null;
-let _imgPopover = null;
-
-function dismissImagePopover() {
-  if (_imgPopover) { _imgPopover.remove(); _imgPopover = null; }
-  if (_activeImg) { _activeImg.classList.remove("img-selected"); _activeImg = null; }
-}
-
-function showImagePopover(img) {
-  dismissImagePopover();
-  _activeImg = img;
-  img.classList.add("img-selected");
-
-  const pop = document.createElement("div");
-  pop.className = "img-resize-popover";
-  pop.innerHTML = `
-    <button data-w="160" title="Small (160px)">S</button>
-    <button data-w="320" title="Medium (320px)">M</button>
-    <button data-w="480" title="Large (480px)">L</button>
-    <button data-w="100%" title="Full width">Full</button>
-    <span class="pop-sep"></span>
-    <button class="pop-delete" title="Remove image">✕</button>
-  `;
-
-  // Position below the image
-  const editor = document.getElementById("rich-editor");
-  const editorRect = editor.getBoundingClientRect();
-  const imgRect = img.getBoundingClientRect();
-  pop.style.left = `${imgRect.left - editorRect.left + editor.scrollLeft}px`;
-  pop.style.top = `${imgRect.bottom - editorRect.top + editor.scrollTop + 6}px`;
-  editor.appendChild(pop);
-  _imgPopover = pop;
-
-  // Highlight current size
-  const currentW = img.style.maxWidth || img.style.width;
-  pop.querySelectorAll("button[data-w]").forEach((btn) => {
-    if (btn.dataset.w === currentW || btn.dataset.w + "px" === currentW) {
-      btn.classList.add("active");
-    }
-  });
-
-  // Size buttons
-  pop.querySelectorAll("button[data-w]").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const w = btn.dataset.w;
-      if (w === "100%") {
-        img.style.maxWidth = "100%";
-        img.style.width = "100%";
-      } else {
-        img.style.maxWidth = w + "px";
-        img.style.width = "auto";
-      }
-      dismissImagePopover();
-      onEditorInput();
-    });
-  });
-
-  // Delete
-  pop.querySelector(".pop-delete")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    img.remove();
-    dismissImagePopover();
-    onEditorInput();
-  });
-}
-
-// Bind editor image clicks
-document.getElementById("rich-editor")?.addEventListener("click", (e) => {
-  if (e.target.tagName === "IMG") {
-    e.preventDefault();
-    showImagePopover(e.target);
-  } else if (!e.target.closest(".img-resize-popover")) {
-    dismissImagePopover();
-  }
-});
-
-// Dismiss on click outside editor
-document.addEventListener("click", (e) => {
-  if (_imgPopover && !e.target.closest("#rich-editor")) {
-    dismissImagePopover();
-  }
-});
-
-async function saveComposeContent(options = {}) {
-  const res = await api("/email-content", {
-    method: "PUT",
-    body: JSON.stringify(getCurrentEmailContent()),
-  });
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || "Failed to save email content");
-  }
-  if (data.content) {
-    applyEmailContent(data.content);
-    updatePreview();
-  }
-  if (!options.quiet) toast("Email content saved!");
-  return data;
-}
-
-async function uploadInlineAsset(file) {
-  const formData = new FormData();
-  formData.append("image", file);
-
-  const res = await api("/email-assets", {
-    method: "POST",
-    body: formData,
-  });
-  const data = await res.json();
-
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || "Failed to upload image");
-  }
-
-  emailAssets = [data.asset, ...emailAssets];
-  renderAssetList();
-  updatePreview();
-  toast(`Uploaded ${data.asset.originalName}`);
-}
-
-// Full email preview (with header/footer/unsubscribe)
-document.getElementById("full-preview-btn")?.addEventListener("click", async () => {
-  try {
-    const res = await api("/email-preview", {
-      method: "POST",
-      body: JSON.stringify(getCurrentEmailContent()),
-    });
-    const html = await res.text();
-    if (!res.ok) throw new Error("Failed to render full preview");
-    const previewContainer = document.getElementById("email-preview");
-    let iframe = previewContainer.querySelector("iframe");
-    if (!iframe) {
-      iframe = document.createElement("iframe");
-      iframe.setAttribute("sandbox", "allow-same-origin");
-      iframe.setAttribute("referrerpolicy", "no-referrer");
-      previewContainer.innerHTML = "";
-      previewContainer.appendChild(iframe);
-    }
-    iframe.srcdoc = html;
-    toast("Showing full email preview with template");
-  } catch (err) {
-    toast(err.message || "Failed to render full preview", "error");
-  }
-});
-
-document.getElementById("save-email")?.addEventListener("click", async () => {
-  try {
-    await saveComposeContent();
-  } catch (err) {
-    toast(err.message || "Failed to save", "error");
-  }
-});
-
-// Test Send
-document.getElementById("test-send-btn")?.addEventListener("click", () => openModal("test-modal"));
-
-document.getElementById("test-form")?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const email = document.getElementById("test-email").value;
-  try {
-    await saveComposeContent({ quiet: true });
-    const res = await api("/test-send", { method: "POST", body: JSON.stringify({ email }) });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      toast(`Test email sent to ${email}!`);
-      closeModal("test-modal");
-    } else { toast(data.error || "Test send failed", "error"); }
-  } catch (err) { toast(err.message || "Test send failed", "error"); }
-});
-
-// Send Now
-document.getElementById("send-email")?.addEventListener("click", () => openModal("send-modal"));
-
-document.getElementById("confirm-send")?.addEventListener("click", async () => {
-  closeModal("send-modal");
-  try {
-    await saveComposeContent({ quiet: true });
-    const res = await api("/send-now", { method: "POST" });
-    const data = await res.json();
-    if (res.ok && data.success) toast("🚀 Send triggered successfully!");
-    else toast(data.error || "Send failed", "error");
-  } catch (err) { toast(err.message || "Send failed", "error"); }
-});
 
 // ── History ──────────────────────────────
 async function loadHistory() {
@@ -907,6 +405,8 @@ document.querySelectorAll("[data-close]").forEach((btn) => {
 });
 document.getElementById("open-upload")?.addEventListener("click", () => {
   document.getElementById("upload-result").classList.add("hidden");
+  const batchInput = document.getElementById("batch-tags-input");
+  if (batchInput) batchInput.value = "";
   openModal("upload-modal");
 });
 document.getElementById("open-add")?.addEventListener("click", () => {
@@ -966,9 +466,6 @@ document.getElementById("search-input")?.addEventListener("input", () => {
 });
 document.getElementById("status-filter")?.addEventListener("change", () => { subscriberPage = 1; loadSubscribers(); });
 document.getElementById("tag-filter")?.addEventListener("change", () => { subscriberPage = 1; loadSubscribers(); });
-document.getElementById("email-subject")?.addEventListener("input", updatePreview);
-document.getElementById("email-html-source")?.addEventListener("input", onEditorInput);
-initRichToolbar();
 
 // ── Campaigns ────────────────────────────
 async function loadCampaignList() {
@@ -1215,12 +712,57 @@ document.getElementById("confirm-campaign-send")?.addEventListener("click", asyn
   try {
     const res = await api(`/campaigns/${currentCampaignId}/send`, { method: "POST" });
     const data = await res.json();
-    if (data.success) {
-      toast(`Campaign sent! ${data.sent} delivered, ${data.failed} failed`);
-      openCampaignEditor(currentCampaignId); // Reload to show stats
-    } else {
+    if (!data.success) {
       toast(data.error || "Send failed", "error");
+      return;
     }
+
+    // Show drip info
+    const drip = data.drip || {};
+    const warmupLabel = drip.isWarmingUp ? ` (Warmup Day ${drip.warmupDay})` : "";
+    toast(`📨 Campaign queued${warmupLabel} — ${drip.chunkSize}/chunk, ${drip.intervalMinutes}min interval`);
+
+    // Poll for drip progress
+    let currentJobId = data.jobId;
+    const pollInterval = setInterval(async () => {
+      try {
+        const jobRes = await api(`/jobs/${currentJobId}`);
+        const job = await jobRes.json();
+
+        if (job.status === "completed") {
+          const r = job.result || {};
+
+          if (r.status === "dripping" && r.remaining > 0) {
+            // Chunk done, more to come — find the next job
+            toast(`📤 Chunk ${r.chunkIndex}: +${r.sent} sent (${r.totalSent} total), ${r.remaining} remaining — next in ${drip.intervalMinutes}min`);
+
+            // Poll for the next chunk job
+            const jobsRes = await api("/jobs?status=pending");
+            const jobsData = await jobsRes.json();
+            const nextJob = (jobsData.jobs || []).find(j =>
+              j.type === "campaign_send" && JSON.parse(j.payload || "{}").campaignId === currentCampaignId
+            );
+            if (nextJob) {
+              currentJobId = nextJob.id;
+            }
+            // Keep polling with same interval
+          } else {
+            // All chunks complete
+            clearInterval(pollInterval);
+            toast(`✅ Campaign complete! ${r.totalSent || 0} sent, ${r.totalFailed || 0} failed (${r.chunkIndex || 1} chunks)`);
+            openCampaignEditor(currentCampaignId);
+          }
+        } else if (job.status === "failed") {
+          clearInterval(pollInterval);
+          toast(`❌ Campaign send failed: ${job.error || "Unknown error"}`, "error");
+          openCampaignEditor(currentCampaignId);
+        }
+        // still 'pending' or 'running' — keep polling
+      } catch {
+        clearInterval(pollInterval);
+        toast("Lost connection while tracking send", "error");
+      }
+    }, 3000);
   } catch { toast("Campaign send failed", "error"); }
 });
 

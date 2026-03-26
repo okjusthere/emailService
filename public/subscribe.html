@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Subscribe to Our Newsletter</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f4f4f5;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 16px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1), 0 8px 24px rgba(0,0,0,0.05);
+      max-width: 420px;
+      width: 100%;
+      overflow: hidden;
+    }
+    .card-header {
+      background: #111827;
+      padding: 32px;
+      text-align: center;
+    }
+    .card-header h1 {
+      color: #fff;
+      font-size: 22px;
+      font-weight: 700;
+    }
+    .card-header p {
+      color: #9ca3af;
+      font-size: 14px;
+      margin-top: 8px;
+    }
+    .card-body {
+      padding: 32px;
+    }
+    .form-group {
+      margin-bottom: 16px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 6px;
+    }
+    input {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 15px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus {
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
+    }
+    button {
+      width: 100%;
+      padding: 14px;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+      margin-top: 8px;
+    }
+    button:hover { background: #1d4ed8; }
+    button:disabled { background: #9ca3af; cursor: not-allowed; }
+    .message {
+      text-align: center;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      margin-top: 16px;
+      display: none;
+    }
+    .message.success { background: #ecfdf5; color: #065f46; display: block; }
+    .message.error { background: #fef2f2; color: #991b1b; display: block; }
+    .footer {
+      text-align: center;
+      padding: 16px 32px 24px;
+      font-size: 12px;
+      color: #9ca3af;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="card-header">
+      <h1>Stay in the Loop</h1>
+      <p>Get the latest updates delivered to your inbox</p>
+    </div>
+    <div class="card-body">
+      <form id="subscribe-form">
+        <div class="form-group">
+          <label for="email">Email Address *</label>
+          <input type="email" id="email" name="email" placeholder="you@example.com" required>
+        </div>
+        <div class="form-group">
+          <label for="name">Name (optional)</label>
+          <input type="text" id="name" name="name" placeholder="Your name">
+        </div>
+        <button type="submit" id="submit-btn">Subscribe</button>
+      </form>
+      <div id="message" class="message"></div>
+    </div>
+    <div class="footer">
+      We respect your privacy. Unsubscribe at any time.
+    </div>
+  </div>
+
+  <script>
+    document.getElementById("subscribe-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById("submit-btn");
+      const msg = document.getElementById("message");
+      const email = document.getElementById("email").value;
+      const name = document.getElementById("name").value;
+
+      btn.disabled = true;
+      btn.textContent = "Subscribing...";
+      msg.className = "message";
+      msg.style.display = "none";
+
+      try {
+        const res = await fetch("/api/subscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, name: name || undefined }),
+        });
+        const data = await res.json();
+
+        if (res.ok && data.success) {
+          msg.className = "message success";
+          msg.textContent = data.message;
+          msg.style.display = "block";
+          document.getElementById("subscribe-form").reset();
+        } else {
+          msg.className = "message error";
+          msg.textContent = data.error || "Something went wrong";
+          msg.style.display = "block";
+        }
+      } catch {
+        msg.className = "message error";
+        msg.textContent = "Network error. Please try again.";
+        msg.style.display = "block";
+      }
+
+      btn.disabled = false;
+      btn.textContent = "Subscribe";
+    });
+  </script>
+</body>
+</html>

@@ -18,7 +18,6 @@ export const config = {
   // Sending
   dailySendCount: parseInt(process.env.DAILY_SEND_COUNT || "5000", 10),
   batchSize: parseInt(process.env.BATCH_SIZE || "100", 10),
-  sendCron: process.env.SEND_CRON || "",
 
   // IP Warmup: date you started sending (YYYY-MM-DD). Auto-limits volume for first 14 days.
   // Once you've been sending for 14+ days, this has no effect.
@@ -26,6 +25,9 @@ export const config = {
 
   // Webhook
   resendWebhookSecret: process.env.RESEND_WEBHOOK_SECRET || "",
+
+  // Subscription
+  doubleOptIn: process.env.DOUBLE_OPTIN !== "false", // default: true
 
   // Company info (CAN-SPAM required — set in .env)
   company: {
