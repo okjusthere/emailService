@@ -11,6 +11,7 @@ import subscribeRoutes from "./routes/subscribe.js";
 import { logger } from "./utils/logger.js";
 
 const app = express();
+const subscribeAllowedOrigins = new Set(config.subscribeAllowedOrigins);
 
 function formatError(err: unknown): unknown {
   if (err instanceof Error) {
@@ -19,7 +20,9 @@ function formatError(err: unknown): unknown {
   return err;
 }
 
-// Parse JSON bodies (for webhooks + API)
+app.use("/webhook", express.raw({ type: "application/json" }), webhookRoutes);
+
+// Parse JSON bodies (for API)
 app.use(express.json());
 // Parse URL-encoded bodies (for unsubscribe form)
 app.use(express.urlencoded({ extended: true }));
@@ -32,16 +35,37 @@ app.use(
 );
 
 // Routes
-app.use("/webhook", webhookRoutes);
 app.use("/unsubscribe", unsubscribeRoutes);
 app.use("/api/admin", adminRoutes);
 
 // CORS for public subscribe API (needed for embed forms on other domains)
 app.use("/api/subscribe", (_req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
+  const origin = _req.get("origin");
+  const isAllowedOrigin = !origin || subscribeAllowedOrigins.has(origin);
+
+  if (origin && isAllowedOrigin) {
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Vary", "Origin");
+  }
+
   res.header("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type");
-  if (_req.method === "OPTIONS") { res.sendStatus(204); return; }
+
+  if (_req.method === "OPTIONS") {
+    if (!isAllowedOrigin) {
+      res.sendStatus(403);
+      return;
+    }
+
+    res.sendStatus(204);
+    return;
+  }
+
+  if (!isAllowedOrigin) {
+    res.status(403).json({ error: "Origin not allowed" });
+    return;
+  }
+
   next();
 });
 app.use("/api/subscribe", subscribeRoutes);
@@ -58,6 +82,8 @@ app.get("/api/subscribe/embed", (_req, res) => {
     style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:6px;font-size:15px;margin-bottom:8px;">
   <input type="text" name="name" placeholder="Name (optional)"
     style="width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:6px;font-size:15px;margin-bottom:8px;">
+  <input type="text" name="website" tabindex="-1" autocomplete="off"
+    style="position:absolute;left:-9999px;opacity:0;pointer-events:none;" aria-hidden="true">
   <button type="submit"
     style="width:100%;padding:12px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer;">
     Subscribe
@@ -68,7 +94,7 @@ app.get("/api/subscribe/embed", (_req, res) => {
 document.getElementById("email-subscribe-form").addEventListener("submit",async e=>{
   e.preventDefault();const f=new FormData(e.target);const msg=document.getElementById("subscribe-msg");
   try{const r=await fetch("${config.baseUrl}/api/subscribe",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({email:f.get("email"),name:f.get("name")||undefined})});const d=await r.json();
+    body:JSON.stringify({email:f.get("email"),name:f.get("name")||undefined,website:f.get("website")||undefined})});const d=await r.json();
     msg.textContent=d.message||d.error;msg.style.color=r.ok?"#059669":"#dc2626";
     if(r.ok)e.target.reset();}catch{msg.textContent="Error. Please try again.";msg.style.color="#dc2626";}
 });

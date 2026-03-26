@@ -37,7 +37,7 @@ export function getCampaign(id: string): Campaign | undefined {
   return db.prepare("SELECT * FROM campaigns WHERE id = ?").get(id) as Campaign | undefined;
 }
 
-export function createCampaign(data: { name: string; subject?: string; body_html?: string; body_text?: string; tag_filter?: string }): Campaign {
+export function createCampaign(data: { name: string; subject?: string; body_html?: string; body_text?: string; tag_filter?: string | null }): Campaign {
   const db = getDb();
   const id = randomUUID();
   db.prepare(
@@ -51,7 +51,7 @@ export function updateCampaign(id: string, data: Partial<Pick<Campaign, "name" |
   const db = getDb();
   const campaign = getCampaign(id);
   if (!campaign) return undefined;
-  if (campaign.status === "sent") return undefined; // can't edit sent campaigns
+  if (campaign.status === "sent" || campaign.status === "sending") return undefined; // can't edit locked campaigns
 
   const fields: string[] = [];
   const values: any[] = [];
@@ -73,6 +73,10 @@ export function updateCampaign(id: string, data: Partial<Pick<Campaign, "name" |
 
 export function deleteCampaign(id: string): boolean {
   const db = getDb();
+  const campaign = getCampaign(id);
+  if (!campaign || campaign.status === "sending") {
+    return false;
+  }
   const result = db.prepare("DELETE FROM campaigns WHERE id = ?").run(id);
   return result.changes > 0;
 }
@@ -95,6 +99,31 @@ export function markCampaignSending(id: string): void {
   db.prepare("UPDATE campaigns SET status = 'sending', updated_at = datetime('now') WHERE id = ?").run(id);
 }
 
+export function tryMarkCampaignSending(id: string): boolean {
+  const db = getDb();
+  const result = db.prepare(
+    `UPDATE campaigns
+     SET status = 'sending', updated_at = datetime('now')
+     WHERE id = ?
+       AND status NOT IN ('sending', 'sent')`
+  ).run(id);
+  return result.changes > 0;
+}
+
+export function markCampaignDraft(id: string): void {
+  const db = getDb();
+  db.prepare(
+    `UPDATE campaigns SET status = 'draft', updated_at = datetime('now') WHERE id = ?`
+  ).run(id);
+}
+
+export function markCampaignFailed(id: string): void {
+  const db = getDb();
+  db.prepare(
+    `UPDATE campaigns SET status = 'failed', updated_at = datetime('now') WHERE id = ?`
+  ).run(id);
+}
+
 export function markCampaignSent(id: string, sentCount: number, failedCount: number): void {
   const db = getDb();
   db.prepare(
@@ -106,12 +135,12 @@ export function getCampaignStats(id: string): CampaignStats {
   const db = getDb();
   const row = db.prepare(
     `SELECT
-      COUNT(*) as total_sent,
-      SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) as delivered,
-      SUM(CASE WHEN status = 'opened' THEN 1 ELSE 0 END) as opened,
-      SUM(CASE WHEN status = 'clicked' THEN 1 ELSE 0 END) as clicked,
-      SUM(CASE WHEN status = 'bounced' THEN 1 ELSE 0 END) as bounced,
-      SUM(CASE WHEN status = 'complained' THEN 1 ELSE 0 END) as complained
+      SUM(CASE WHEN status != 'failed' THEN 1 ELSE 0 END) as total_sent,
+      SUM(CASE WHEN delivery_status = 'delivered' THEN 1 ELSE 0 END) as delivered,
+      SUM(CASE WHEN opened_at IS NOT NULL THEN 1 ELSE 0 END) as opened,
+      SUM(CASE WHEN clicked_at IS NOT NULL THEN 1 ELSE 0 END) as clicked,
+      SUM(CASE WHEN delivery_status = 'bounced' THEN 1 ELSE 0 END) as bounced,
+      SUM(CASE WHEN delivery_status = 'complained' THEN 1 ELSE 0 END) as complained
     FROM send_logs WHERE campaign_id = ?`
   ).get(id) as any;
 

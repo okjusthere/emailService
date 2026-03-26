@@ -1,11 +1,16 @@
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import fs from "fs";
-import { requireAuth } from "../utils/auth.js";
+import {
+  clearAdminSession,
+  createAdminSession,
+  isValidApiSecret,
+  requireAuth,
+} from "../utils/auth.js";
 import { config } from "../config.js";
 import { getStats, addSubscriber, bulkImport, findByEmail } from "../services/subscriberService.js";
 import { sendTestEmail, type EmailContent } from "../services/emailSender.js";
-import { getEffectiveDailyLimit } from "../utils/warmup.js";
+import { getDripConfig, getEffectiveDailyLimit } from "../utils/warmup.js";
 import { buildRecruitmentEmail } from "../templates/recruitmentEmail.js";
 import { getDb } from "../db/connection.js";
 import { logger } from "../utils/logger.js";
@@ -26,6 +31,8 @@ import {
   deleteCampaign,
   duplicateCampaign,
   getCampaignStats,
+  markCampaignDraft,
+  tryMarkCampaignSending,
 } from "../services/campaignService.js";
 import {
   listTags,
@@ -36,8 +43,68 @@ import {
   getSubscriberTags,
   getOrCreateTag,
 } from "../services/tagService.js";
+import { createJob, getJob, listJobs } from "../services/jobService.js";
+import {
+  normalizePlainText,
+  normalizeSubject,
+  sanitizeEmailHtml,
+} from "../utils/emailHtml.js";
+import { escapeCsvField, parseCsv } from "../utils/csv.js";
 
 const router = Router();
+
+function normalizeCampaignInput(payload: Record<string, unknown>): {
+  body_html?: string;
+  body_text?: string;
+  name?: string;
+  subject?: string;
+  tag_filter?: string | null;
+} {
+  const normalized: {
+    body_html?: string;
+    body_text?: string;
+    name?: string;
+    subject?: string;
+    tag_filter?: string | null;
+  } = {};
+
+  if (typeof payload.name === "string") {
+    normalized.name = payload.name.trim();
+  }
+  if (typeof payload.subject === "string") {
+    normalized.subject = normalizeSubject(payload.subject);
+  }
+  if (typeof payload.body_html === "string") {
+    normalized.body_html = sanitizeEmailHtml(payload.body_html);
+  }
+  if (typeof payload.body_text === "string") {
+    normalized.body_text = normalizePlainText(payload.body_text);
+  }
+  if ("tag_filter" in payload) {
+    normalized.tag_filter =
+      typeof payload.tag_filter === "string" && payload.tag_filter.trim()
+        ? payload.tag_filter.trim()
+        : null;
+  }
+
+  return normalized;
+}
+
+router.post("/login", (req: Request, res: Response) => {
+  const secret = typeof req.body?.secret === "string" ? req.body.secret : "";
+  if (!isValidApiSecret(secret)) {
+    res.status(401).json({ error: "Invalid secret" });
+    return;
+  }
+
+  createAdminSession(res);
+  res.json({ success: true });
+});
+
+router.post("/logout", (req: Request, res: Response) => {
+  clearAdminSession(req, res);
+  res.status(204).end();
+});
 
 router.use(requireAuth);
 
@@ -67,7 +134,10 @@ function paramId(req: Request): string {
 }
 
 function buildPreviewEmail(content: EmailContent, baseUrl: string): string {
-  const resolved = resolveAssetPlaceholdersToPublicUrls(content.bodyHtml, baseUrl);
+  const resolved = resolveAssetPlaceholdersToPublicUrls(
+    sanitizeEmailHtml(content.bodyHtml),
+    baseUrl
+  );
 
   if (resolved.missingAssetIds.length > 0) {
     logger.warn("Preview is missing embedded assets", resolved.missingAssetIds);
@@ -99,12 +169,12 @@ router.get("/stats", (_req: Request, res: Response) => {
   const engagement = db
     .prepare(
       `SELECT
-        COUNT(*) as total_sent,
-        SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) as delivered,
-        SUM(CASE WHEN status = 'opened' THEN 1 ELSE 0 END) as opened,
-        SUM(CASE WHEN status = 'clicked' THEN 1 ELSE 0 END) as clicked,
-        SUM(CASE WHEN status = 'bounced' THEN 1 ELSE 0 END) as bounced,
-        SUM(CASE WHEN status = 'complained' THEN 1 ELSE 0 END) as complained
+        SUM(CASE WHEN status != 'failed' THEN 1 ELSE 0 END) as total_sent,
+        SUM(CASE WHEN delivery_status = 'delivered' THEN 1 ELSE 0 END) as delivered,
+        SUM(CASE WHEN opened_at IS NOT NULL THEN 1 ELSE 0 END) as opened,
+        SUM(CASE WHEN clicked_at IS NOT NULL THEN 1 ELSE 0 END) as clicked,
+        SUM(CASE WHEN delivery_status = 'bounced' THEN 1 ELSE 0 END) as bounced,
+        SUM(CASE WHEN delivery_status = 'complained' THEN 1 ELSE 0 END) as complained
       FROM send_logs`
     )
     .get() as any;
@@ -152,12 +222,13 @@ router.get("/campaigns", (_req: Request, res: Response) => {
 });
 
 router.post("/campaigns", (req: Request, res: Response) => {
-  const { name } = req.body;
+  const payload = normalizeCampaignInput(req.body || {});
+  const { name } = payload;
   if (!name) {
     res.status(400).json({ error: "name is required" });
     return;
   }
-  const campaign = createCampaign(req.body);
+  const campaign = createCampaign({ ...payload, name });
   res.json({ success: true, campaign });
 });
 
@@ -171,9 +242,15 @@ router.get("/campaigns/:id", (req: Request, res: Response) => {
 });
 
 router.put("/campaigns/:id", (req: Request, res: Response) => {
-  const campaign = updateCampaign(paramId(req), req.body);
+  const campaignId = paramId(req);
+  if (!getCampaign(campaignId)) {
+    res.status(404).json({ error: "Campaign not found" });
+    return;
+  }
+
+  const campaign = updateCampaign(campaignId, normalizeCampaignInput(req.body || {}));
   if (!campaign) {
-    res.status(404).json({ error: "Campaign not found or already sent" });
+    res.status(409).json({ error: "Campaign is locked for sending" });
     return;
   }
   res.json({ success: true, campaign });
@@ -235,8 +312,8 @@ router.post("/campaigns/:id/send", (req: Request, res: Response) => {
     res.status(404).json({ error: "Campaign not found" });
     return;
   }
-  if (campaign.status === "sending") {
-    res.status(409).json({ error: "Campaign is already sending" });
+  if (campaign.status === "sending" || campaign.status === "sent") {
+    res.status(409).json({ error: "Campaign cannot be queued again" });
     return;
   }
   if (!campaign.subject || !campaign.body_html) {
@@ -251,21 +328,29 @@ router.post("/campaigns/:id/send", (req: Request, res: Response) => {
     if (tagIds.length === 0) tagIds = undefined;
   }
 
-  // Get warmup-aware drip config
-  const { getDripConfig } = require("../utils/warmup.js");
   const drip = getDripConfig({
     chunkSize: req.body?.chunkSize ? Number(req.body.chunkSize) : undefined,
     intervalMinutes: req.body?.intervalMinutes ? Number(req.body.intervalMinutes) : undefined,
   });
 
-  // Create a drip send job
-  const { createJob } = require("../services/jobService.js");
-  const job = createJob("campaign_send", {
-    campaignId: campaign.id,
-    tagIds: tagIds || null,
-    chunkSize: drip.chunkSize,
-    intervalMinutes: drip.intervalMinutes,
-  });
+  if (!tryMarkCampaignSending(campaign.id)) {
+    res.status(409).json({ error: "Campaign is already sending or already sent" });
+    return;
+  }
+
+  let job: ReturnType<typeof createJob>;
+  try {
+    job = createJob("campaign_send", {
+      campaignId: campaign.id,
+      tagIds: tagIds || null,
+      chunkSize: drip.chunkSize,
+      intervalMinutes: drip.intervalMinutes,
+    });
+  } catch (error: any) {
+    markCampaignDraft(campaign.id);
+    res.status(500).json({ error: error.message || "Failed to queue campaign send" });
+    return;
+  }
 
   logger.info(
     `Campaign send queued as job ${job.id} (drip: ${drip.chunkSize}/chunk, ${drip.intervalMinutes}min interval)`
@@ -504,7 +589,14 @@ router.get("/subscribers/export", (req: Request, res: Response) => {
   const header = "email,name,status,send_count,last_sent_at,created_at";
   const rows = subscribers.map(
     (subscriber) =>
-      `"${subscriber.email}","${subscriber.name || ""}","${subscriber.status}",${subscriber.send_count || 0},"${subscriber.last_sent_at || ""}","${subscriber.created_at}"`
+      [
+        escapeCsvField(subscriber.email),
+        escapeCsvField(subscriber.name || ""),
+        escapeCsvField(subscriber.status),
+        subscriber.send_count || 0,
+        escapeCsvField(subscriber.last_sent_at || ""),
+        escapeCsvField(subscriber.created_at),
+      ].join(",")
   );
   const csv = [header, ...rows].join("\n");
 
@@ -527,14 +619,14 @@ router.post(
 
     try {
       const content = fs.readFileSync(req.file.path, "utf-8");
-      const lines = content.trim().split("\n");
+      const rows = parseCsv(content);
 
-      if (lines.length < 2) {
+      if (rows.length < 2) {
         res.status(400).json({ error: "CSV must have header + at least 1 row" });
         return;
       }
 
-      const header = lines[0].toLowerCase().split(",").map((part) => part.trim());
+      const header = rows[0].map((part) => part.trim().toLowerCase());
       const emailIndex = header.indexOf("email");
       const nameIndex = header.indexOf("name");
       const tagsIndex = header.indexOf("tags");
@@ -546,13 +638,11 @@ router.post(
 
       const users: { email: string; name?: string; tags?: string[] }[] = [];
 
-      for (let index = 1; index < lines.length; index++) {
-        const columns = lines[index]
-          .split(",")
-          .map((part) => part.trim().replace(/^"|"$/g, ""));
+      for (let index = 1; index < rows.length; index++) {
+        const columns = rows[index].map((part) => part.trim());
         const email = columns[emailIndex];
 
-        if (!email || !email.includes("@")) {
+        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
           continue;
         }
 
@@ -701,13 +791,11 @@ router.delete("/email-assets/:id", (req: Request, res: Response) => {
 
 // ── Jobs ─────────────────────────────────
 router.get("/jobs", (req: Request, res: Response) => {
-  const { listJobs } = require("../services/jobService.js");
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
   res.json({ jobs: listJobs({ status, limit: 50 }) });
 });
 
 router.get("/jobs/:id", (req: Request, res: Response) => {
-  const { getJob } = require("../services/jobService.js");
   const job = getJob(paramId(req));
   if (!job) {
     res.status(404).json({ error: "Job not found" });
@@ -749,4 +837,3 @@ router.get("/me", (_req: Request, res: Response) => {
 });
 
 export default router;
-

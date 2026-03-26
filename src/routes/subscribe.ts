@@ -5,6 +5,66 @@ import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
 
 const router = Router();
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const subscribeAttemptsByIp = new Map<string, number[]>();
+const subscribeAttemptsByEmail = new Map<string, number[]>();
+
+function getRequestIp(req: Request): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    return forwarded.split(",")[0].trim();
+  }
+
+  return req.ip || req.socket.remoteAddress || "unknown";
+}
+
+function normalizeEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function isValidEmail(value: string): boolean {
+  return EMAIL_PATTERN.test(value);
+}
+
+function registerAttempt(
+  store: Map<string, number[]>,
+  key: string,
+  now: number,
+  windowMs: number,
+  max: number
+): boolean {
+  const attempts = (store.get(key) || []).filter((value) => now - value < windowMs);
+  attempts.push(now);
+  store.set(key, attempts);
+
+  return attempts.length <= max;
+}
+
+function canSendAnotherConfirmation(
+  timestamp: string | null | undefined
+): boolean {
+  if (!timestamp) {
+    return true;
+  }
+
+  const lastSentAt = new Date(timestamp).getTime();
+  if (!Number.isFinite(lastSentAt)) {
+    return true;
+  }
+
+  const cooldownMs = config.confirmationResendCooldownMinutes * 60 * 1000;
+  return Date.now() - lastSentAt >= cooldownMs;
+}
+
+function markConfirmationSent(subscriberId: number): void {
+  const db = getDb();
+  db.prepare(
+    `UPDATE subscribers
+     SET confirmation_sent_at = datetime('now'),
+         updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(subscriberId);
+}
 
 /**
  * POST /api/subscribe — Public subscription endpoint
@@ -13,18 +73,53 @@ const router = Router();
  * If doubleOptIn is disabled: creates with status 'active' immediately
  */
 router.post("/", async (req: Request, res: Response) => {
-  const { email, name } = req.body || {};
+  const { email, name, website } = req.body || {};
 
-  if (!email || typeof email !== "string" || !email.includes("@")) {
+  if (typeof website === "string" && website.trim()) {
+    res.json({ success: true, message: "Thanks for subscribing!" });
+    return;
+  }
+
+  if (!email || typeof email !== "string" || !isValidEmail(email)) {
     res.status(400).json({ error: "Valid email is required" });
     return;
   }
 
   const db = getDb();
-  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedEmail = normalizeEmail(email);
+  const now = Date.now();
+  const windowMs = config.subscribeRateWindowMinutes * 60 * 1000;
+  const ip = getRequestIp(req);
+
+  if (
+    !registerAttempt(
+      subscribeAttemptsByIp,
+      ip,
+      now,
+      windowMs,
+      config.subscribeIpWindowMax
+    ) ||
+    !registerAttempt(
+      subscribeAttemptsByEmail,
+      normalizedEmail,
+      now,
+      windowMs,
+      config.subscribeEmailWindowMax
+    )
+  ) {
+    logger.warn(`Subscribe rate limited for ${normalizedEmail} from ${ip}`);
+    res
+      .status(429)
+      .json({ error: "Too many subscription attempts. Please try again later." });
+    return;
+  }
 
   // Check if already subscribed
-  const existing = db.prepare("SELECT id, status, confirmation_token FROM subscribers WHERE email = ?").get(normalizedEmail) as any;
+  const existing = db.prepare(
+    `SELECT id, status, confirmation_token, confirmation_sent_at
+     FROM subscribers
+     WHERE email = ?`
+  ).get(normalizedEmail) as any;
 
   if (existing) {
     if (existing.status === "active") {
@@ -32,8 +127,21 @@ router.post("/", async (req: Request, res: Response) => {
       return;
     }
     if (existing.status === "pending" && config.doubleOptIn) {
+      if (!canSendAnotherConfirmation(existing.confirmation_sent_at)) {
+        res.status(429).json({
+          error: `A confirmation email was sent recently. Please wait ${config.confirmationResendCooldownMinutes} minutes before trying again.`,
+        });
+        return;
+      }
+
       // Resend confirmation
-      await sendConfirmationEmail(normalizedEmail, existing.confirmation_token);
+      const sent = await sendConfirmationEmail(normalizedEmail, existing.confirmation_token);
+      if (!sent) {
+        res.status(503).json({ error: "Unable to send confirmation email right now. Please try again later." });
+        return;
+      }
+
+      markConfirmationSent(existing.id);
       res.json({ success: true, message: "Confirmation email resent. Please check your inbox." });
       return;
     }
@@ -42,9 +150,21 @@ router.post("/", async (req: Request, res: Response) => {
       if (config.doubleOptIn) {
         const token = randomUUID();
         db.prepare(
-          `UPDATE subscribers SET status = 'pending', confirmation_token = ?, name = COALESCE(?, name), updated_at = datetime('now') WHERE id = ?`
+          `UPDATE subscribers
+           SET status = 'pending',
+               confirmation_token = ?,
+               confirmation_sent_at = NULL,
+               name = COALESCE(?, name),
+               updated_at = datetime('now')
+           WHERE id = ?`
         ).run(token, name || null, existing.id);
-        await sendConfirmationEmail(normalizedEmail, token);
+        const sent = await sendConfirmationEmail(normalizedEmail, token);
+        if (!sent) {
+          res.status(503).json({ error: "Unable to send confirmation email right now. Please try again later." });
+          return;
+        }
+
+        markConfirmationSent(existing.id);
         res.json({ success: true, message: "Confirmation email sent. Please check your inbox." });
       } else {
         db.prepare(
@@ -61,10 +181,17 @@ router.post("/", async (req: Request, res: Response) => {
 
   if (config.doubleOptIn) {
     const confirmToken = randomUUID();
-    db.prepare(
-      `INSERT INTO subscribers (email, name, status, unsubscribe_token, confirmation_token) VALUES (?, ?, 'pending', ?, ?)`
+    const result = db.prepare(
+      `INSERT INTO subscribers (email, name, status, unsubscribe_token, confirmation_token)
+       VALUES (?, ?, 'pending', ?, ?)`
     ).run(normalizedEmail, name || null, unsubscribeToken, confirmToken);
-    await sendConfirmationEmail(normalizedEmail, confirmToken);
+    const sent = await sendConfirmationEmail(normalizedEmail, confirmToken);
+    if (!sent) {
+      res.status(503).json({ error: "Unable to send confirmation email right now. Please try again later." });
+      return;
+    }
+
+    markConfirmationSent(Number(result.lastInsertRowid));
     logger.info(`New subscriber (pending): ${normalizedEmail}`);
     res.json({ success: true, message: "Confirmation email sent. Please check your inbox." });
   } else {
@@ -113,7 +240,7 @@ router.get("/confirm", (req: Request, res: Response) => {
 /**
  * Send a confirmation email with a link to verify the subscription.
  */
-async function sendConfirmationEmail(email: string, token: string): Promise<void> {
+async function sendConfirmationEmail(email: string, token: string): Promise<boolean> {
   try {
     const { Resend } = await import("resend");
     const resend = new Resend(config.resendApiKey);
@@ -128,8 +255,10 @@ async function sendConfirmationEmail(email: string, token: string): Promise<void
     });
 
     logger.info(`Confirmation email sent to ${email}`);
+    return true;
   } catch (err: any) {
     logger.error(`Failed to send confirmation email to ${email}: ${err.message}`);
+    return false;
   }
 }
 

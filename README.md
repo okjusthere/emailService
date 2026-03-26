@@ -1,120 +1,144 @@
-# 📧 Resend Email Service
+# Resend Email Service
 
-A lightweight, self-hosted bulk email service with admin dashboard, built on [Resend API](https://resend.com). CAN-SPAM compliant out of the box.
+A lightweight, self-hosted email operations layer built on top of [Resend](https://resend.com).
 
-> **The simplest way to manage and send bulk emails with Resend.** No Redis, no PostgreSQL — just SQLite and one container.
+This project is intentionally not a full SMTP platform. It focuses on the operational layer most small teams need:
 
----
+- campaign composition and previews
+- subscriber management and tagging
+- drip-style campaign delivery with a DB-backed job queue
+- Resend webhook ingestion for engagement and suppression handling
+- public subscribe forms with double opt-in support
+- a single-container deployment model using SQLite
 
-## ✨ Features
+## What It Does
 
-### Admin Dashboard
-- 🔐 **Login authentication** — API secret based, no registration needed
-- 📊 **Dashboard** — subscriber stats, engagement rates (open/click/bounce), warmup progress
-- 👥 **Subscriber management** — search, filter, add, delete, bulk operations
-- 📤 **CSV import / export** — upload subscribers in bulk, download lists anytime
-- ✉️ **Email editor** — compose with live preview, full template preview with header/footer
-- 📧 **Test send** — send yourself a preview before blasting to thousands
-- 🚀 **One-click send** — trigger batch send from the dashboard
-- 📋 **Send history** — batch logs with status tracking
+### Admin
+- Password-style admin login using `API_SECRET` with a short-lived HTTP-only session cookie
+- Dashboard with subscriber totals, engagement metrics, warmup state, and recent batches
+- Subscriber CRUD, bulk status changes, tag assignment, CSV import/export
+- Campaign editor with rich-text mode, raw HTML mode, merge tags, test send, and live preview
+- Image asset upload for email templates, including inline embedded-image sending support
 
-### Email Engine
-- 🔄 **Resend Batch API** — sends 100 emails per API call with rate limiting
-- ♻️ **Round-robin scheduling** — rotates through subscribers evenly
-- 🛡️ **Duplicate prevention** — never sends to the same person twice in one day
-- 🔥 **IP warmup** — 14-day graduated volume (200→5000) for new domains
-- ⏰ **Cron scheduler** — optional daily automatic sends
-- 🪝 **Webhook auto-handling** — bounces and complaints auto-deactivate subscribers
-- ✅ **Webhook signature verification** — HMAC-SHA256 with replay protection
+### Sending
+- Sends through Resend batch API when possible
+- Automatically falls back to throttled single-send mode when a template uses embedded images
+- Campaign delivery is deduplicated per campaign, not per day across the whole system
+- DB-backed drip queue with resumable jobs and retry handling
+- Warmup-aware drip defaults for newer domains
 
-### Compliance
-- 📜 **CAN-SPAM Act** — physical address, ad disclosure, one-click unsubscribe
-- 📧 **List-Unsubscribe header** — meets Google/Yahoo 2024 bulk sender requirements
-- 🔒 **SPF/DKIM/DMARC** — handled by Resend's infrastructure
+### Compliance And Safety
+- Unsubscribe links and `List-Unsubscribe` headers
+- Bounce/complaint webhooks automatically suppress future sends
+- Public subscribe endpoint supports double opt-in, resend cooldowns, per-IP / per-email rate limiting, and a honeypot field
+- Admin HTML is sanitized on save/send and previewed inside a sandboxed iframe
+- Resend webhook signatures are verified against the raw request body
 
-## 🚀 Quick Start
+## Architecture
+
+### Stack
+- Runtime: Node.js + TypeScript
+- API: Express
+- Database: SQLite via `better-sqlite3`
+- Mail transport: Resend API
+- Frontend: Vanilla HTML/CSS/JS
+- Deployment: Docker / Railway
+
+### Storage
+- `data/email_service.db`: SQLite database
+- `data/email-assets/`: uploaded email images and asset manifest
+
+Mount `data/` on a persistent volume in production.
+
+## Quick Start
 
 ```bash
 git clone https://github.com/okjusthere/emailService.git
 cd emailService
 npm install
 cp .env.example .env
-# Edit .env with your Resend API key, company info, etc.
+# edit .env
 npm run dev
-# Open http://localhost:3000/admin
 ```
 
-## 📦 Tech Stack
+Open [http://localhost:3000/admin](http://localhost:3000/admin).
 
-| Component | Technology |
-|-----------|-----------|
-| Runtime | Node.js + TypeScript |
-| Framework | Express |
-| Database | SQLite (better-sqlite3) |
-| Email API | Resend |
-| Frontend | Vanilla HTML/CSS/JS |
-| Deployment | Docker / Railway |
-
-## ⚙️ Environment Variables
+## Environment Variables
 
 ```bash
 # Required
-RESEND_API_KEY=re_xxxxxxxxxxxx          # From resend.com
-FROM_EMAIL=you@yourdomain.com           # Verified domain in Resend
-FROM_NAME=Your Company                  # Sender display name
-REPLY_TO_EMAIL=reply@yourdomain.com     # Reply-to address
-COMPANY_NAME=Your Company Inc.          # CAN-SPAM required
-COMPANY_ADDRESS=123 Main St, City, ST   # CAN-SPAM required
-API_SECRET=your-secret-key              # Admin dashboard password
-BASE_URL=https://your-domain.com        # Public URL for unsubscribe links
+RESEND_API_KEY=re_xxxxxxxxxxxx
+FROM_EMAIL=newsletter@yourdomain.com
+FROM_NAME=Your Company
+REPLY_TO_EMAIL=hello@yourdomain.com
+API_SECRET=your-admin-secret
+BASE_URL=https://your-domain.com
+COMPANY_NAME=Your Company Inc.
+COMPANY_ADDRESS=123 Main St, City, State ZIP
 
-# Optional
-DAILY_SEND_COUNT=5000                   # Emails per day (default: 5000)
-BATCH_SIZE=100                          # Emails per API call (default: 100)
-SEND_CRON=0 14 * * *                   # Cron schedule (empty = manual only)
-SEND_START_DATE=2026-01-01              # IP warmup start date
-RESEND_WEBHOOK_SECRET=whsec_xxx         # Webhook signature verification
+# Delivery
+DAILY_SEND_COUNT=5000
+BATCH_SIZE=100
+SEND_START_DATE=2026-03-25
+RESEND_WEBHOOK_SECRET=whsec_xxxxxxxxxxxx
+
+# Admin auth
+ADMIN_SESSION_TTL_HOURS=12
+
+# Subscribe endpoint hardening
+DOUBLE_OPTIN=true
+SUBSCRIBE_ALLOWED_ORIGINS=https://your-domain.com,https://www.your-site.com
+SUBSCRIBE_RATE_WINDOW_MINUTES=60
+SUBSCRIBE_IP_WINDOW_MAX=20
+SUBSCRIBE_EMAIL_WINDOW_MAX=5
+CONFIRMATION_RESEND_COOLDOWN_MINUTES=15
 ```
 
-## 🐳 Deploy to Railway
+Notes:
 
-1. Push this repo to GitHub
-2. Create a new Railway project → **Deploy from GitHub**
-3. Add a **Volume** mounted at `/app/data`
-4. Set **environment variables** in Railway dashboard
-5. Done! Visit `https://your-app.up.railway.app/admin`
+- `SUBSCRIBE_ALLOWED_ORIGINS` should list every origin allowed to host your embedded subscribe form. If omitted, it defaults to `BASE_URL`'s origin.
+- In production, `RESEND_WEBHOOK_SECRET` should always be set.
+- `API_SECRET` is still accepted on `x-api-secret` for scripted admin API access, but the browser admin uses a session cookie after login.
 
-## 📊 API Endpoints
+## Public Endpoints
 
-| Endpoint | Method | Auth | Description |
-|----------|--------|------|-------------|
-| `/admin` | GET | — | Admin dashboard |
-| `/health` | GET | — | Health check |
-| `/unsubscribe?token=xxx` | GET | — | Unsubscribe page |
-| `/webhook/resend` | POST | Signature | Resend webhook |
-| `/api/admin/*` | ALL | `x-api-secret` | Admin API |
+| Endpoint | Method | Description |
+| --- | --- | --- |
+| `/health` | `GET` | Basic health check |
+| `/subscribe` | `GET` | Hosted subscribe page |
+| `/api/subscribe` | `POST` | Public subscribe API |
+| `/api/subscribe/confirm` | `GET` | Double opt-in confirmation |
+| `/unsubscribe` | `GET`, `POST` | Hosted unsubscribe flow |
+| `/webhook/resend` | `POST` | Resend webhook receiver |
 
-## 📁 Project Structure
+## Admin Endpoints
 
-```
-├── public/              # Admin dashboard frontend
-│   ├── index.html
-│   ├── style.css
-│   └── app.js
-├── src/
-│   ├── config.ts        # Environment variable config
-│   ├── index.ts         # Express server entry point
-│   ├── db/              # SQLite connection & migrations
-│   ├── routes/          # Admin API, webhook, unsubscribe
-│   ├── services/        # Email sender, scheduler, subscriber service
-│   ├── templates/       # Email HTML template
-│   ├── utils/           # Auth, compliance, warmup, logger
-│   └── webhooks/        # Resend webhook handler
-├── Dockerfile
-├── .env.example
-└── package.json
-```
+| Endpoint | Method | Auth |
+| --- | --- | --- |
+| `/admin` | `GET` | Browser UI |
+| `/api/admin/login` | `POST` | `API_SECRET` in request body |
+| `/api/admin/logout` | `POST` | Session cookie |
+| `/api/admin/*` | `GET/POST/PUT/DELETE` | Session cookie or `x-api-secret` |
 
-## 📝 License
+## Railway Deployment
+
+1. Push the repository to GitHub.
+2. Create a Railway service from the repo.
+3. Add a volume mounted at `/app/data`.
+4. Configure the environment variables above.
+5. Deploy.
+
+Recommended production checks:
+
+- verify `/health`
+- verify `/admin`
+- configure the Resend webhook endpoint as `https://your-domain.com/webhook/resend`
+- confirm `SUBSCRIBE_ALLOWED_ORIGINS` matches every site embedding the subscribe form
+
+## Current Positioning
+
+This project is best thought of as a lightweight Resend-backed email operations service, not a full replacement for systems like Postal or broader marketing suites like Mautic. It keeps the sending surface small and operationally simple by delegating deliverability infrastructure to Resend.
+
+## License
 
 MIT

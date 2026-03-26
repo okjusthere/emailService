@@ -113,6 +113,15 @@
           <label for="name">Name (optional)</label>
           <input type="text" id="name" name="name" placeholder="Your name">
         </div>
+        <input
+          type="text"
+          id="website"
+          name="website"
+          tabindex="-1"
+          autocomplete="off"
+          aria-hidden="true"
+          style="position:absolute;left:-9999px;opacity:0;pointer-events:none;"
+        >
         <button type="submit" id="submit-btn">Subscribe</button>
       </form>
       <div id="message" class="message"></div>
@@ -129,6 +138,7 @@
       const msg = document.getElementById("message");
       const email = document.getElementById("email").value;
       const name = document.getElementById("name").value;
+      const website = document.getElementById("website").value;
 
       btn.disabled = true;
       btn.textContent = "Subscribing...";
@@ -139,7 +149,7 @@
         const res = await fetch("/api/subscribe", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, name: name || undefined }),
+          body: JSON.stringify({ email, name: name || undefined, website: website || undefined }),
         });
         const data = await res.json();
 

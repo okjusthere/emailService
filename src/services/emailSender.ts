@@ -4,7 +4,8 @@ import { Resend, type Attachment } from "resend";
 import { config } from "../config.js";
 import { getDb } from "../db/connection.js";
 import {
-  getNextBatch,
+  countRemainingCampaignRecipients,
+  getNextCampaignBatch,
   markAsSent,
   type Subscriber,
 } from "./subscriberService.js";
@@ -22,6 +23,11 @@ import {
   hasEmbeddedAssets,
   resolveAssetPlaceholdersToInlineAttachments,
 } from "./emailAssetService.js";
+import {
+  normalizePlainText,
+  normalizeSubject,
+  sanitizeEmailHtml,
+} from "../utils/emailHtml.js";
 
 export interface EmailContent {
   subject: string;
@@ -54,16 +60,24 @@ function getReplyTo(): string | undefined {
 }
 
 function prepareEmailContent(content: EmailContent): PreparedEmailContent {
-  if (!hasEmbeddedAssets(content.bodyHtml)) {
+  const normalizedContent: EmailContent = {
+    subject: normalizeSubject(content.subject),
+    bodyHtml: sanitizeEmailHtml(content.bodyHtml),
+    bodyText: normalizePlainText(content.bodyText),
+  };
+
+  if (!hasEmbeddedAssets(normalizedContent.bodyHtml)) {
     return {
-      ...content,
+      ...normalizedContent,
       attachments: [],
       usesEmbeddedAssets: false,
-      resolvedBodyHtml: content.bodyHtml,
+      resolvedBodyHtml: normalizedContent.bodyHtml,
     };
   }
 
-  const resolved = resolveAssetPlaceholdersToInlineAttachments(content.bodyHtml);
+  const resolved = resolveAssetPlaceholdersToInlineAttachments(
+    normalizedContent.bodyHtml
+  );
 
   if (resolved.missingAssetIds.length > 0) {
     throw new Error(
@@ -72,7 +86,7 @@ function prepareEmailContent(content: EmailContent): PreparedEmailContent {
   }
 
   return {
-    ...content,
+    ...normalizedContent,
     attachments: resolved.attachments,
     usesEmbeddedAssets: true,
     resolvedBodyHtml: resolved.html,
@@ -341,7 +355,7 @@ export async function sendCampaignChunk(
   remaining: number;
 }> {
   const db = getDb();
-  const subscribers = getNextBatch(chunkSize, tagIds);
+  const subscribers = getNextCampaignBatch(campaignId, chunkSize, tagIds);
 
   if (subscribers.length === 0) {
     return { batchId: "", sent: 0, failed: 0, remaining: 0 };
@@ -365,14 +379,7 @@ export async function sendCampaignChunk(
       `UPDATE batches SET sent_count = ?, failed_count = ?, status = 'completed', completed_at = datetime('now') WHERE id = ?`
     ).run(result.sent, result.failed, batchId);
 
-    // Count remaining active subscribers not yet sent to today
-    const remaining = getNextBatch(1, tagIds).length > 0 ? -1 : 0; // -1 = more exist
-    const actualRemaining = remaining === 0 ? 0
-      : (db.prepare(
-          `SELECT COUNT(*) as c FROM subscribers
-           WHERE status = 'active'
-             AND (last_sent_at IS NULL OR date(last_sent_at) < date('now'))`
-        ).get() as any).c;
+    const actualRemaining = countRemainingCampaignRecipients(campaignId, tagIds);
 
     return {
       batchId,

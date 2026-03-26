@@ -15,12 +15,14 @@ export interface Subscriber {
 }
 
 /**
- * Get the next batch of active subscribers to send to.
- * Uses round-robin: selects users with the oldest `last_sent_at` first,
- * then users who have never been sent to (NULL last_sent_at).
- * DEDUP: Excludes any subscriber already sent to today.
+ * Get the next batch of active subscribers for a campaign.
+ * DEDUP: Excludes subscribers already accepted for this campaign.
  */
-export function getNextBatch(count: number, tagIds?: number[]): Subscriber[] {
+export function getNextCampaignBatch(
+  campaignId: string,
+  count: number,
+  tagIds?: number[]
+): Subscriber[] {
   const db = getDb();
 
   if (tagIds && tagIds.length > 0) {
@@ -29,24 +31,75 @@ export function getNextBatch(count: number, tagIds?: number[]): Subscriber[] {
       SELECT DISTINCT s.* FROM subscribers s
       JOIN subscriber_tags st ON st.subscriber_id = s.id
       WHERE s.status = 'active'
-        AND (s.last_sent_at IS NULL OR date(s.last_sent_at) < date('now'))
         AND st.tag_id IN (${placeholders})
+        AND NOT EXISTS (
+          SELECT 1 FROM send_logs sl
+          WHERE sl.subscriber_id = s.id
+            AND sl.campaign_id = ?
+            AND sl.status != 'failed'
+        )
       ORDER BY
         CASE WHEN s.last_sent_at IS NULL THEN 0 ELSE 1 END,
-        s.last_sent_at ASC
+        s.last_sent_at ASC,
+        s.id ASC
       LIMIT ?
-    `).all(...tagIds, count) as Subscriber[];
+    `).all(...tagIds, campaignId, count) as Subscriber[];
   }
 
   return db.prepare(`
-    SELECT * FROM subscribers
-    WHERE status = 'active'
-      AND (last_sent_at IS NULL OR date(last_sent_at) < date('now'))
+    SELECT s.* FROM subscribers s
+    WHERE s.status = 'active'
+      AND NOT EXISTS (
+        SELECT 1 FROM send_logs sl
+        WHERE sl.subscriber_id = s.id
+          AND sl.campaign_id = ?
+          AND sl.status != 'failed'
+      )
     ORDER BY
-      CASE WHEN last_sent_at IS NULL THEN 0 ELSE 1 END,
-      last_sent_at ASC
+      CASE WHEN s.last_sent_at IS NULL THEN 0 ELSE 1 END,
+      s.last_sent_at ASC,
+      s.id ASC
     LIMIT ?
-  `).all(count) as Subscriber[];
+  `).all(campaignId, count) as Subscriber[];
+}
+
+export function countRemainingCampaignRecipients(
+  campaignId: string,
+  tagIds?: number[]
+): number {
+  const db = getDb();
+
+  if (tagIds && tagIds.length > 0) {
+    const placeholders = tagIds.map(() => "?").join(",");
+    const row = db.prepare(`
+      SELECT COUNT(DISTINCT s.id) AS count
+      FROM subscribers s
+      JOIN subscriber_tags st ON st.subscriber_id = s.id
+      WHERE s.status = 'active'
+        AND st.tag_id IN (${placeholders})
+        AND NOT EXISTS (
+          SELECT 1 FROM send_logs sl
+          WHERE sl.subscriber_id = s.id
+            AND sl.campaign_id = ?
+            AND sl.status != 'failed'
+        )
+    `).get(...tagIds, campaignId) as { count: number };
+    return row.count || 0;
+  }
+
+  const row = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM subscribers s
+    WHERE s.status = 'active'
+      AND NOT EXISTS (
+        SELECT 1 FROM send_logs sl
+        WHERE sl.subscriber_id = s.id
+          AND sl.campaign_id = ?
+          AND sl.status != 'failed'
+      )
+  `).get(campaignId) as { count: number };
+
+  return row.count || 0;
 }
 
 /**

@@ -32,9 +32,14 @@ export function handleWebhookEvent(event: ResendWebhookEvent): void {
 
   switch (type) {
     case "email.delivered": {
-      // Update send log status
       db.prepare(
-        `UPDATE send_logs SET status = 'delivered' WHERE resend_email_id = ?`
+        `UPDATE send_logs
+         SET delivery_status = CASE
+               WHEN delivery_status IN ('bounced', 'complained') THEN delivery_status
+               ELSE 'delivered'
+             END,
+             delivered_at = COALESCE(delivered_at, datetime('now'))
+         WHERE resend_email_id = ?`
       ).run(data.email_id);
       break;
     }
@@ -42,7 +47,10 @@ export function handleWebhookEvent(event: ResendWebhookEvent): void {
     case "email.bounced": {
       // Mark subscriber as bounced — never send to them again
       db.prepare(
-        `UPDATE send_logs SET status = 'bounced' WHERE resend_email_id = ?`
+        `UPDATE send_logs
+         SET delivery_status = 'bounced',
+             bounced_at = COALESCE(bounced_at, datetime('now'))
+         WHERE resend_email_id = ?`
       ).run(data.email_id);
 
       for (const email of data.to) {
@@ -57,7 +65,10 @@ export function handleWebhookEvent(event: ResendWebhookEvent): void {
     case "email.complained": {
       // Mark subscriber as complained — never send to them again (critical for CAN-SPAM)
       db.prepare(
-        `UPDATE send_logs SET status = 'complained' WHERE resend_email_id = ?`
+        `UPDATE send_logs
+         SET delivery_status = 'complained',
+             complained_at = COALESCE(complained_at, datetime('now'))
+         WHERE resend_email_id = ?`
       ).run(data.email_id);
 
       for (const email of data.to) {
@@ -71,14 +82,29 @@ export function handleWebhookEvent(event: ResendWebhookEvent): void {
 
     case "email.opened": {
       db.prepare(
-        `UPDATE send_logs SET status = 'opened' WHERE resend_email_id = ? AND status NOT IN ('bounced', 'complained')`
+        `UPDATE send_logs
+         SET delivery_status = CASE
+               WHEN delivery_status IN ('bounced', 'complained') THEN delivery_status
+               ELSE COALESCE(NULLIF(delivery_status, ''), 'delivered')
+             END,
+             delivered_at = COALESCE(delivered_at, datetime('now')),
+             opened_at = COALESCE(opened_at, datetime('now'))
+         WHERE resend_email_id = ?`
       ).run(data.email_id);
       break;
     }
 
     case "email.clicked": {
       db.prepare(
-        `UPDATE send_logs SET status = 'clicked' WHERE resend_email_id = ? AND status NOT IN ('bounced', 'complained')`
+        `UPDATE send_logs
+         SET delivery_status = CASE
+               WHEN delivery_status IN ('bounced', 'complained') THEN delivery_status
+               ELSE COALESCE(NULLIF(delivery_status, ''), 'delivered')
+             END,
+             delivered_at = COALESCE(delivered_at, datetime('now')),
+             opened_at = COALESCE(opened_at, datetime('now')),
+             clicked_at = COALESCE(clicked_at, datetime('now'))
+         WHERE resend_email_id = ?`
       ).run(data.email_id);
       break;
     }

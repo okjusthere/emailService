@@ -1,20 +1,43 @@
 // ── State ────────────────────────────────
-let apiSecret = localStorage.getItem("apiSecret") || "";
 let currentPage = "dashboard";
 let subscriberPage = 1;
 let selectedIds = new Set();
 let allTags = [];
 let currentCampaignId = null;
 let campaignSourceMode = false;
+const blockedEditorTags = [
+  "script",
+  "iframe",
+  "object",
+  "embed",
+  "form",
+  "input",
+  "button",
+  "textarea",
+  "select",
+  "option",
+  "meta",
+  "base",
+  "link",
+  "svg",
+  "math",
+];
 
 // ── API Helper ───────────────────────────
 async function api(path, options = {}) {
-  const headers = { "x-api-secret": apiSecret };
+  const headers = {};
   if (options.body && !(options.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
   }
-  const res = await fetch(`/api/admin${path}`, { ...options, headers: { ...headers, ...options.headers } });
-  if (res.status === 401) { logout(); throw new Error("Unauthorized"); }
+  const res = await fetch(`/api/admin${path}`, {
+    ...options,
+    credentials: "same-origin",
+    headers: { ...headers, ...options.headers },
+  });
+  if (res.status === 401 && path !== "/logout") {
+    await logout(false);
+    throw new Error("Unauthorized");
+  }
   return res;
 }
 
@@ -28,28 +51,42 @@ function toast(message, type = "success") {
 }
 
 // ── Auth ─────────────────────────────────
+function showApp() {
+  document.getElementById("login-screen").classList.add("hidden");
+  document.getElementById("app").classList.remove("hidden");
+}
+
 async function tryLogin(secret) {
-  apiSecret = secret;
   try {
-    const res = await api("/me");
+    const res = await fetch("/api/admin/login", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ secret }),
+    });
     if (!res.ok) throw new Error();
-    localStorage.setItem("apiSecret", secret);
-    document.getElementById("login-screen").classList.add("hidden");
-    document.getElementById("app").classList.remove("hidden");
+    showApp();
     navigateTo("dashboard");
     return true;
   } catch {
-    apiSecret = "";
     return false;
   }
 }
 
-function logout() {
-  apiSecret = "";
-  localStorage.removeItem("apiSecret");
+async function logout(performRequest = true) {
+  if (performRequest) {
+    try {
+      await fetch("/api/admin/logout", {
+        method: "POST",
+        credentials: "same-origin",
+      });
+    } catch {}
+  }
+
   document.getElementById("app").classList.add("hidden");
   document.getElementById("login-screen").classList.remove("hidden");
   document.getElementById("login-secret").value = "";
+  document.getElementById("login-error").classList.add("hidden");
 }
 
 // ── Navigation ───────────────────────────
@@ -341,7 +378,7 @@ document.getElementById("export-csv")?.addEventListener("click", () => {
   const status = document.getElementById("status-filter").value;
   const url = `/api/admin/subscribers/export?status=${status}`;
   // Create a temporary link to trigger download with auth
-  fetch(url, { headers: { "x-api-secret": apiSecret } })
+  fetch(url, { credentials: "same-origin" })
     .then((res) => res.blob())
     .then((blob) => {
       const a = document.createElement("a");
@@ -423,6 +460,28 @@ function escapeHtml(str) {
   div.textContent = str;
   return div.innerHTML;
 }
+
+function sanitizeEditorHtml(value) {
+  let html = String(value || "");
+
+  blockedEditorTags.forEach((tag) => {
+    html = html.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}>`, "gi"), "");
+    html = html.replace(new RegExp(`<${tag}\\b[^>]*\\/?>`, "gi"), "");
+  });
+
+  html = html.replace(/\son[a-z-]+\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, "");
+  html = html.replace(
+    /\s(href|src)\s*=\s*(['"])\s*(?:javascript:|vbscript:|data:text\/html)[\s\S]*?\2/gi,
+    ""
+  );
+  html = html.replace(
+    /\sstyle\s*=\s*(".*?expression\s*\(.*?\).*?"|'.*?expression\s*\(.*?\).*?'|[^\s>]+)/gi,
+    ""
+  );
+
+  return html;
+}
+
 function formatDate(str) {
   if (!str) return "—";
   const d = new Date(str + (str.includes("Z") ? "" : "Z"));
@@ -442,7 +501,9 @@ document.getElementById("login-form")?.addEventListener("submit", async (e) => {
     document.getElementById("login-error").classList.remove("hidden");
   }
 });
-document.getElementById("logout-btn")?.addEventListener("click", logout);
+document.getElementById("logout-btn")?.addEventListener("click", () => {
+  void logout();
+});
 document.getElementById("refresh-stats")?.addEventListener("click", loadDashboard);
 document.getElementById("asset-file")?.addEventListener("change", async (e) => {
   const file = e.target.files?.[0];
@@ -516,20 +577,20 @@ async function openCampaignEditor(id) {
       currentCampaignId = c.id;
       document.getElementById("campaign-name").value = c.name;
       document.getElementById("campaign-subject").value = c.subject;
-      document.getElementById("campaign-rich-editor").innerHTML = c.body_html || "";
+      document.getElementById("campaign-rich-editor").innerHTML = sanitizeEditorHtml(c.body_html || "");
       document.getElementById("campaign-html-source").value = c.body_html || "";
       document.getElementById("campaign-text").value = c.body_text || "";
       document.getElementById("campaign-tag-filter").value = c.tag_filter || "";
 
-      // Disable editing if sent
-      const isSent = c.status === "sent";
-      document.getElementById("campaign-save").style.display = isSent ? "none" : "";
-      document.getElementById("campaign-send-btn").style.display = isSent ? "none" : "";
-      document.getElementById("campaign-rich-editor").contentEditable = !isSent;
+      // Disable editing while a campaign is locked for sending
+      const isLocked = c.status === "sent" || c.status === "sending";
+      document.getElementById("campaign-save").style.display = isLocked ? "none" : "";
+      document.getElementById("campaign-send-btn").style.display = isLocked ? "none" : "";
+      document.getElementById("campaign-rich-editor").contentEditable = !isLocked;
 
       // Show stats for sent campaigns
       const statsBar = document.getElementById("campaign-sent-stats");
-      if (isSent && data.stats) {
+      if ((c.status === "sent" || c.status === "sending") && data.stats) {
         const s = data.stats;
         const openRate = s.delivered ? ((s.opened / s.delivered) * 100).toFixed(1) : "0.0";
         const clickRate = s.delivered ? ((s.clicked / s.delivered) * 100).toFixed(1) : "0.0";
@@ -621,7 +682,11 @@ async function updateCampaignPreview() {
     await saveCampaign();
     const res = await api(`/campaigns/${currentCampaignId}/preview`, { method: "POST" });
     const html = await res.text();
-    document.getElementById("campaign-preview").innerHTML = html;
+    const preview = document.getElementById("campaign-preview");
+    const frame = document.createElement("iframe");
+    frame.setAttribute("sandbox", "");
+    frame.srcdoc = html;
+    preview.replaceChildren(frame);
   } catch {}
 }
 
@@ -659,7 +724,7 @@ function initCampaignToolbar() {
       source.style.display = "";
       sourceToggle.classList.add("active");
     } else {
-      editor.innerHTML = source.value;
+      editor.innerHTML = sanitizeEditorHtml(source.value);
       editor.style.display = "";
       source.style.display = "none";
       sourceToggle.classList.remove("active");
@@ -674,6 +739,19 @@ function initCampaignToolbar() {
       const text = editor.innerText || editor.textContent || "";
       document.getElementById("campaign-text").value = text.replace(/\n{3,}/g, "\n\n").trim();
     }, 400);
+  });
+
+  editor.addEventListener("paste", (event) => {
+    event.preventDefault();
+    const html = event.clipboardData?.getData("text/html");
+    const text = event.clipboardData?.getData("text/plain") || "";
+
+    if (html) {
+      document.execCommand("insertHTML", false, sanitizeEditorHtml(html));
+      return;
+    }
+
+    document.execCommand("insertText", false, text);
   });
 }
 
@@ -780,8 +858,13 @@ document.querySelectorAll(".merge-tag-btn").forEach(btn => {
 
 // ── Init ─────────────────────────────────
 (async () => {
-  if (apiSecret) {
-    const ok = await tryLogin(apiSecret);
-    if (!ok) logout();
+  try {
+    const res = await api("/me");
+    if (res.ok) {
+      showApp();
+      navigateTo("dashboard");
+    }
+  } catch {
+    // Leave the login screen visible for unauthenticated sessions.
   }
 })();

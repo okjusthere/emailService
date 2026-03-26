@@ -111,6 +111,61 @@ export function runMigrations(): void {
     db.exec(`ALTER TABLE send_logs ADD COLUMN campaign_id TEXT`);
     db.exec(`CREATE INDEX IF NOT EXISTS idx_send_logs_campaign ON send_logs(campaign_id)`);
   }
+  if (!sendLogCols.some((c) => c.name === "delivery_status")) {
+    db.exec(`ALTER TABLE send_logs ADD COLUMN delivery_status TEXT`);
+  }
+  if (!sendLogCols.some((c) => c.name === "delivered_at")) {
+    db.exec(`ALTER TABLE send_logs ADD COLUMN delivered_at DATETIME`);
+  }
+  if (!sendLogCols.some((c) => c.name === "opened_at")) {
+    db.exec(`ALTER TABLE send_logs ADD COLUMN opened_at DATETIME`);
+  }
+  if (!sendLogCols.some((c) => c.name === "clicked_at")) {
+    db.exec(`ALTER TABLE send_logs ADD COLUMN clicked_at DATETIME`);
+  }
+  if (!sendLogCols.some((c) => c.name === "bounced_at")) {
+    db.exec(`ALTER TABLE send_logs ADD COLUMN bounced_at DATETIME`);
+  }
+  if (!sendLogCols.some((c) => c.name === "complained_at")) {
+    db.exec(`ALTER TABLE send_logs ADD COLUMN complained_at DATETIME`);
+  }
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_send_logs_campaign_subscriber
+     ON send_logs(campaign_id, subscriber_id)`
+  );
+
+  db.exec(`
+    UPDATE send_logs
+    SET delivery_status = CASE
+      WHEN status IN ('delivered', 'opened', 'clicked') THEN 'delivered'
+      WHEN status = 'bounced' THEN 'bounced'
+      WHEN status = 'complained' THEN 'complained'
+      WHEN status = 'failed' THEN 'failed'
+      WHEN status = 'sent' THEN 'sent'
+      ELSE COALESCE(delivery_status, status)
+    END
+    WHERE delivery_status IS NULL OR delivery_status = '';
+
+    UPDATE send_logs
+    SET delivered_at = COALESCE(delivered_at, sent_at, created_at)
+    WHERE status IN ('delivered', 'opened', 'clicked') AND delivered_at IS NULL;
+
+    UPDATE send_logs
+    SET opened_at = COALESCE(opened_at, created_at, sent_at)
+    WHERE status IN ('opened', 'clicked') AND opened_at IS NULL;
+
+    UPDATE send_logs
+    SET clicked_at = COALESCE(clicked_at, created_at, sent_at)
+    WHERE status = 'clicked' AND clicked_at IS NULL;
+
+    UPDATE send_logs
+    SET bounced_at = COALESCE(bounced_at, created_at, sent_at)
+    WHERE status = 'bounced' AND bounced_at IS NULL;
+
+    UPDATE send_logs
+    SET complained_at = COALESCE(complained_at, created_at, sent_at)
+    WHERE status = 'complained' AND complained_at IS NULL;
+  `);
 
   // Add campaign_id to batches if not present
   const batchCols = db.pragma("table_info(batches)") as { name: string }[];
@@ -127,7 +182,9 @@ export function runMigrations(): void {
   if (!subscriberCols.some((c) => c.name === "confirmed_at")) {
     db.exec(`ALTER TABLE subscribers ADD COLUMN confirmed_at DATETIME`);
   }
+  if (!subscriberCols.some((c) => c.name === "confirmation_sent_at")) {
+    db.exec(`ALTER TABLE subscribers ADD COLUMN confirmation_sent_at DATETIME`);
+  }
 
   logger.success("Database migrations completed");
 }
-

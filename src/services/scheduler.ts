@@ -8,6 +8,7 @@ import {
   type Job,
 } from "./jobService.js";
 import {
+  markCampaignFailed,
   getCampaign,
   markCampaignSending,
   markCampaignSent,
@@ -136,7 +137,15 @@ async function tick(): Promise<void> {
     try {
       await processJob(job);
     } catch (err: any) {
-      failJob(job.id, err.message || "Unknown error");
+      const message = err.message || "Unknown error";
+      failJob(job.id, message);
+
+      if (job.type === "campaign_send" && job.attempts >= job.max_attempts) {
+        const payload = JSON.parse(job.payload);
+        if (payload.campaignId) {
+          markCampaignFailed(payload.campaignId);
+        }
+      }
     }
   } catch (err: any) {
     logger.error(`Job worker tick error: ${err.message}`);
