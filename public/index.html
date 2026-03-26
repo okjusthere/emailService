@@ -83,6 +83,29 @@
             <tbody id="recent-batches-body"><tr><td colspan="5" class="center">Loading...</td></tr></tbody>
           </table>
         </div>
+
+        <div class="card">
+          <div class="section-heading">
+            <div>
+              <h3>Growth Tools</h3>
+              <p class="section-note">Share the hosted subscribe page or copy an embed snippet for another site.</p>
+            </div>
+            <button id="copy-embed-btn" class="btn-secondary btn-sm" type="button">Copy Embed</button>
+          </div>
+          <div class="tools-grid">
+            <div class="tool-panel">
+              <label for="subscribe-page-url">Hosted Subscribe Page</label>
+              <div class="copy-row">
+                <input id="subscribe-page-url" type="text" readonly>
+                <button id="copy-subscribe-url" class="btn-secondary btn-sm" type="button">Copy</button>
+              </div>
+            </div>
+            <div class="tool-panel tool-panel-wide">
+              <label for="subscribe-embed-code">Embed Snippet</label>
+              <textarea id="subscribe-embed-code" rows="8" readonly></textarea>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- Subscribers Page -->
@@ -154,6 +177,9 @@
         <div id="bulk-bar" class="bulk-bar hidden">
           <span id="selected-count">0 selected</span>
           <button id="bulk-activate" class="btn-secondary btn-sm">✅ Activate</button>
+          <button id="bulk-unsubscribe" class="btn-secondary btn-sm">✉️ Unsubscribe</button>
+          <button id="bulk-bounce" class="btn-secondary btn-sm">🚫 Bounced</button>
+          <button id="bulk-complain" class="btn-secondary btn-sm">⚠️ Complained</button>
           <button id="bulk-tag" class="btn-secondary btn-sm">🏷 Tag</button>
           <button id="bulk-untag" class="btn-secondary btn-sm">🏷 Untag</button>
           <button id="bulk-delete" class="btn-danger btn-sm">🗑 Delete</button>
@@ -168,12 +194,46 @@
               <select id="tag-select"></select>
               <div style="display:flex;gap:8px;margin-top:8px">
                 <input type="text" id="new-tag-name" placeholder="New tag name..." style="flex:1">
+                <input type="color" id="new-tag-color-modal" value="#6366f1" style="width:56px;padding:4px">
                 <button type="button" id="create-tag-btn" class="btn-secondary btn-sm">Create</button>
               </div>
               <div class="modal-actions" style="margin-top:12px">
                 <button id="apply-tag-btn" class="btn-primary">Apply</button>
                 <button class="btn-secondary" data-close="tag-modal">Cancel</button>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="management-grid">
+          <div class="card">
+            <div class="section-heading">
+              <div>
+                <h3>Audience Tags</h3>
+                <p class="section-note">Create, color, and clean up segment tags from the admin UI.</p>
+              </div>
+            </div>
+            <div class="tag-manager-form">
+              <input type="text" id="new-tag-name-inline" placeholder="New tag name">
+              <input type="color" id="new-tag-color" value="#6366f1" aria-label="Tag color">
+              <button id="create-tag-inline" class="btn-secondary" type="button">Create Tag</button>
+            </div>
+            <div id="tag-management-list" class="tag-manager-list"></div>
+          </div>
+
+          <div class="card">
+            <div class="section-heading">
+              <div>
+                <h3>Recent Unsubscribes</h3>
+                <p class="section-note">See why people opted out and which addresses churned most recently.</p>
+              </div>
+            </div>
+            <div id="unsubscribe-reason-list" class="reason-chip-list"></div>
+            <div class="simple-table-wrap">
+              <table>
+                <thead><tr><th>Email</th><th>Reason</th><th>Time</th></tr></thead>
+                <tbody id="unsubscribe-recent-body"><tr><td colspan="3" class="center">Loading...</td></tr></tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -244,6 +304,37 @@
                   <span class="field-tip" style="margin-left:auto">Click to insert. Auto-replaced with each subscriber's data on send.</span>
                 </div>
 
+                <div class="editor-toolbar">
+                  <div>
+                    <div class="editor-toolbar-label">Snippet Blocks</div>
+                    <div class="snippet-grid">
+                      <button type="button" class="snippet-btn" data-snippet="cta">CTA Button</button>
+                      <button type="button" class="snippet-btn" data-snippet="announcement">Announcement Card</button>
+                      <button type="button" class="snippet-btn" data-snippet="divider">Divider</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="asset-studio">
+                  <div class="asset-studio-header">
+                    <div>
+                      <div class="asset-eyebrow">Embedded Media</div>
+                      <h3>Image Asset Studio</h3>
+                    </div>
+                    <label class="btn-secondary file-trigger" for="asset-file">
+                      <span>🖼</span>
+                      <span>Upload Image</span>
+                    </label>
+                    <input id="asset-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden">
+                  </div>
+                  <p class="asset-help">
+                    Upload once, then insert images as embedded assets with <code>{{asset:...}}</code> placeholders. These become real inline images on send.
+                  </p>
+                  <div class="asset-list" id="asset-list">
+                    <div class="asset-empty">No embedded assets yet.</div>
+                  </div>
+                </div>
+
                 <div class="form-group">
                   <div class="field-header">
                     <label>Email Body</label>
@@ -287,8 +378,19 @@
             </div>
             <div class="compose-preview">
               <div class="preview-header">
-                <h3>Preview</h3>
+                <div>
+                  <h3>Preview</h3>
+                  <p class="preview-subtitle">Theme applies to preview, test sends, and live sends.</p>
+                </div>
+                <label class="preview-mode-control" for="campaign-template-mode">
+                  <span>Email Theme</span>
+                  <select id="campaign-template-mode">
+                    <option value="branded">Branded</option>
+                    <option value="personal">Personal</option>
+                  </select>
+                </label>
               </div>
+              <div class="preview-caption" id="campaign-preview-caption"></div>
               <div class="email-preview-frame" id="campaign-preview"></div>
             </div>
           </div>
@@ -312,7 +414,22 @@
             <div class="modal-content">
               <div class="modal-header"><h3>⚠️ Confirm Send</h3><button class="modal-close" data-close="campaign-send-modal">✕</button></div>
               <div class="modal-body">
-                <p id="campaign-send-confirm-text">This will send the campaign to subscribers. Are you sure?</p>
+                <p id="campaign-send-confirm-text">
+                  This queues a one-time campaign send. After you confirm, the worker keeps sending drip chunks automatically
+                  until every matching subscriber for this campaign is processed. Use <strong>Test Send</strong> if you only want a single preview email.
+                </p>
+                <div class="send-settings-grid">
+                  <div class="form-group">
+                    <label for="campaign-send-chunk-size">Chunk Size</label>
+                    <input id="campaign-send-chunk-size" type="number" min="1" step="1" placeholder="50">
+                    <span class="field-tip">How many recipients to send per drip chunk for this one campaign run.</span>
+                  </div>
+                  <div class="form-group">
+                    <label for="campaign-send-interval">Interval Minutes</label>
+                    <input id="campaign-send-interval" type="number" min="1" step="1" placeholder="Auto">
+                    <span class="field-tip">Leave empty to auto-calculate a safe gap between chunks. This is not a recurring schedule.</span>
+                  </div>
+                </div>
                 <div class="modal-actions">
                   <button id="confirm-campaign-send" class="btn-primary btn-send">🚀 Yes, Send</button>
                   <button class="btn-secondary" data-close="campaign-send-modal">Cancel</button>
@@ -329,10 +446,47 @@
           <h1>Send History</h1>
         </div>
         <div class="card">
+          <div class="section-heading">
+            <div>
+              <h3>Recent Batches</h3>
+              <p class="section-note">Inspect batch progress and drill into delivery logs for failures.</p>
+            </div>
+          </div>
           <table id="history-table">
-            <thead><tr><th>Batch ID</th><th>Total</th><th>Sent</th><th>Failed</th><th>Status</th><th>Started</th><th>Completed</th></tr></thead>
-            <tbody id="history-body"><tr><td colspan="7" class="center">Loading...</td></tr></tbody>
+            <thead><tr><th>Batch ID</th><th>Campaign</th><th>Total</th><th>Sent</th><th>Failed</th><th>Status</th><th>Started</th><th>Completed</th><th>Logs</th></tr></thead>
+            <tbody id="history-body"><tr><td colspan="9" class="center">Loading...</td></tr></tbody>
           </table>
+        </div>
+
+        <div class="card">
+          <div class="section-heading">
+            <div>
+              <h3>Queue Jobs</h3>
+              <p class="section-note">The worker queue behind drip sends and test sends.</p>
+            </div>
+          </div>
+          <table id="jobs-table">
+            <thead><tr><th>Job ID</th><th>Type</th><th>Status</th><th>Campaign</th><th>Attempts</th><th>Run After</th><th>Error</th></tr></thead>
+            <tbody id="jobs-body"><tr><td colspan="7" class="center">Loading...</td></tr></tbody>
+          </table>
+        </div>
+
+        <div id="batch-logs-modal" class="modal hidden">
+          <div class="modal-content modal-wide">
+            <div class="modal-header">
+              <h3>Batch Delivery Logs</h3>
+              <button class="modal-close" data-close="batch-logs-modal">✕</button>
+            </div>
+            <div class="modal-body">
+              <div id="batch-logs-summary" class="field-tip" style="margin-bottom:12px"></div>
+              <div class="simple-table-wrap">
+                <table>
+                  <thead><tr><th>Email</th><th>Status</th><th>Delivery</th><th>Error</th><th>Sent</th></tr></thead>
+                  <tbody id="batch-logs-body"><tr><td colspan="5" class="center">Loading...</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
     </main>

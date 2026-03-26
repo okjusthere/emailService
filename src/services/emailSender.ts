@@ -12,6 +12,7 @@ import {
 import {
   buildRecruitmentEmail,
   buildPlainText,
+  type TemplateMode,
 } from "../templates/recruitmentEmail.js";
 import {
   getComplianceHeaders,
@@ -33,6 +34,7 @@ export interface EmailContent {
   subject: string;
   bodyHtml: string;
   bodyText: string;
+  templateMode?: TemplateMode;
 }
 
 let resendClient: Resend | null = null;
@@ -41,6 +43,15 @@ interface PreparedEmailContent extends EmailContent {
   attachments: Attachment[];
   usesEmbeddedAssets: boolean;
   resolvedBodyHtml: string;
+}
+
+interface BatchSendItem {
+  id?: string;
+}
+
+interface BatchSendPayload {
+  data?: BatchSendItem[];
+  errors?: Array<{ index: number; message: string }>;
 }
 
 function getResendClient(): Resend {
@@ -64,6 +75,7 @@ function prepareEmailContent(content: EmailContent): PreparedEmailContent {
     subject: normalizeSubject(content.subject),
     bodyHtml: sanitizeEmailHtml(content.bodyHtml),
     bodyText: normalizePlainText(content.bodyText),
+    templateMode: content.templateMode,
   };
 
   if (!hasEmbeddedAssets(normalizedContent.bodyHtml)) {
@@ -113,19 +125,22 @@ function buildSubscriberEmail(
   attachments: Attachment[];
   headers: Record<string, string>;
   html: string;
+  subject: string;
   text: string;
 } {
   const unsubscribeUrl = buildUnsubscribeUrl(subscriber.unsubscribe_token);
 
   // Apply merge tags to body content
+  const personalizedSubject = replaceMergeTags(content.subject, subscriber);
   const personalizedHtml = replaceMergeTags(content.resolvedBodyHtml, subscriber);
   const personalizedText = replaceMergeTags(content.bodyText, subscriber);
 
   const html = buildRecruitmentEmail({
     recipientName: subscriber.name || undefined,
-    subject: content.subject,
+    subject: personalizedSubject,
     bodyHtml: personalizedHtml,
     unsubscribeUrl,
+    templateMode: content.templateMode,
   });
   const text = buildPlainText({
     recipientName: subscriber.name || undefined,
@@ -137,6 +152,7 @@ function buildSubscriberEmail(
     attachments: content.attachments,
     headers: getComplianceHeaders(unsubscribeUrl),
     html,
+    subject: personalizedSubject,
     text,
   };
 }
@@ -165,6 +181,22 @@ function assertResendSuccess(
   return response.data;
 }
 
+export function normalizeBatchSendPayload(payload: unknown): BatchSendPayload {
+  if (Array.isArray(payload)) {
+    return { data: payload as BatchSendItem[] };
+  }
+
+  if (payload && typeof payload === "object") {
+    const objectPayload = payload as BatchSendPayload;
+    return {
+      data: Array.isArray(objectPayload.data) ? objectPayload.data : [],
+      errors: Array.isArray(objectPayload.errors) ? objectPayload.errors : [],
+    };
+  }
+
+  return { data: [], errors: [] };
+}
+
 async function sendBatchEmails(
   subscribers: Subscriber[],
   content: PreparedEmailContent,
@@ -178,8 +210,8 @@ async function sendBatchEmails(
     return {
       from: `${config.fromName} <${config.fromEmail}>`,
       to: [subscriber.email],
-      reply_to: getReplyTo(),
-      subject: content.subject,
+      replyTo: getReplyTo(),
+      subject: rendered.subject,
       html: rendered.html,
       text: rendered.text,
       headers: rendered.headers,
@@ -191,17 +223,21 @@ async function sendBatchEmails(
   try {
     const resend = getResendClient();
     const response = await resend.batch.send(emails);
-    const data = assertResendSuccess(response, "Batch send failed") as {
-      id?: string;
-    }[];
+    const batchPayload = normalizeBatchSendPayload(
+      assertResendSuccess(response, "Batch send failed")
+    );
+    const data = batchPayload.data || [];
+    const errorsByIndex = new Map(
+      (batchPayload.errors || []).map((item) => [item.index, item.message])
+    );
 
     const insertSuccessLog = db.prepare(
-      `INSERT INTO send_logs (batch_id, subscriber_id, resend_email_id, status, sent_at, campaign_id)
-       VALUES (?, ?, ?, ?, datetime('now'), ?)`
+      `INSERT INTO send_logs (batch_id, subscriber_id, resend_email_id, status, sent_at, campaign_id, delivery_status)
+       VALUES (?, ?, ?, ?, datetime('now'), ?, 'sent')`
     );
     const insertFailureLog = db.prepare(
-      `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message, campaign_id)
-       VALUES (?, ?, 'failed', ?, ?)`
+      `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message, campaign_id, delivery_status)
+       VALUES (?, ?, 'failed', ?, ?, 'failed')`
     );
     const successfulSubscriberIds: number[] = [];
 
@@ -219,7 +255,7 @@ async function sendBatchEmails(
         insertFailureLog.run(
           batchId,
           subscriber.id,
-          "Resend batch API did not return an email id",
+          errorsByIndex.get(index) || "Resend batch API did not return an email id",
           campaignId || null
         );
       }
@@ -237,8 +273,8 @@ async function sendBatchEmails(
     logger.error(`Batch send failed: ${error.message}`);
 
     const insertFailureLog = db.prepare(
-      `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message, campaign_id)
-       VALUES (?, ?, 'failed', ?, ?)`
+      `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message, campaign_id, delivery_status)
+       VALUES (?, ?, 'failed', ?, ?, 'failed')`
     );
 
     db.transaction(() => {
@@ -286,7 +322,7 @@ async function sendInlineEmails(
             from: `${config.fromName} <${config.fromEmail}>`,
             to: [subscriber.email],
             replyTo: getReplyTo(),
-            subject: content.subject,
+            subject: rendered.subject,
             html: rendered.html,
             text: rendered.text,
             headers: rendered.headers,
@@ -301,16 +337,16 @@ async function sendInlineEmails(
           }
 
           db.prepare(
-            `INSERT INTO send_logs (batch_id, subscriber_id, resend_email_id, status, sent_at, campaign_id)
-             VALUES (?, ?, ?, ?, datetime('now'), ?)`
+            `INSERT INTO send_logs (batch_id, subscriber_id, resend_email_id, status, sent_at, campaign_id, delivery_status)
+             VALUES (?, ?, ?, ?, datetime('now'), ?, 'sent')`
           ).run(batchId, subscriber.id, data.id, "sent", campaignId || null);
 
           markAsSent([subscriber.id]);
           sent += 1;
         } catch (error: any) {
           db.prepare(
-            `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message, campaign_id)
-             VALUES (?, ?, 'failed', ?, ?)`
+            `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message, campaign_id, delivery_status)
+             VALUES (?, ?, 'failed', ?, ?, 'failed')`
           ).run(batchId, subscriber.id, error.message, campaignId || null);
 
           failed += 1;
@@ -422,7 +458,7 @@ export async function sendTestEmail(
       from: `${config.fromName} <${config.fromEmail}>`,
       to: [testEmail],
       replyTo: getReplyTo(),
-      subject: `[TEST] ${content.subject}`,
+      subject: `[TEST] ${rendered.subject}`,
       html: rendered.html,
       text: rendered.text,
       headers: rendered.headers,

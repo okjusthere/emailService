@@ -11,7 +11,12 @@ import { config } from "../config.js";
 import { getStats, addSubscriber, bulkImport, findByEmail } from "../services/subscriberService.js";
 import { sendTestEmail, type EmailContent } from "../services/emailSender.js";
 import { getDripConfig, getEffectiveDailyLimit } from "../utils/warmup.js";
-import { buildRecruitmentEmail } from "../templates/recruitmentEmail.js";
+import {
+  buildRecruitmentEmail,
+  getDefaultTemplateMode,
+  resolveTemplateMode,
+  type TemplateMode,
+} from "../templates/recruitmentEmail.js";
 import { getDb } from "../db/connection.js";
 import { logger } from "../utils/logger.js";
 import {
@@ -59,6 +64,7 @@ function normalizeCampaignInput(payload: Record<string, unknown>): {
   name?: string;
   subject?: string;
   tag_filter?: string | null;
+  template_mode?: TemplateMode;
 } {
   const normalized: {
     body_html?: string;
@@ -66,6 +72,7 @@ function normalizeCampaignInput(payload: Record<string, unknown>): {
     name?: string;
     subject?: string;
     tag_filter?: string | null;
+    template_mode?: TemplateMode;
   } = {};
 
   if (typeof payload.name === "string") {
@@ -85,6 +92,12 @@ function normalizeCampaignInput(payload: Record<string, unknown>): {
       typeof payload.tag_filter === "string" && payload.tag_filter.trim()
         ? payload.tag_filter.trim()
         : null;
+  }
+  if ("template_mode" in payload) {
+    normalized.template_mode = resolveTemplateMode(
+      payload.template_mode,
+      getDefaultTemplateMode()
+    );
   }
 
   return normalized;
@@ -133,6 +146,18 @@ function paramId(req: Request): string {
   return Array.isArray(id) ? id[0] : id;
 }
 
+function parseJsonValue(value: string | null | undefined): unknown {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
 function buildPreviewEmail(content: EmailContent, baseUrl: string): string {
   const resolved = resolveAssetPlaceholdersToPublicUrls(
     sanitizeEmailHtml(content.bodyHtml),
@@ -148,6 +173,7 @@ function buildPreviewEmail(content: EmailContent, baseUrl: string): string {
     subject: content.subject,
     bodyHtml: resolved.html,
     unsubscribeUrl: `${baseUrl}/unsubscribe?token=preview-token`,
+    templateMode: content.templateMode,
   });
 }
 
@@ -173,6 +199,7 @@ router.get("/stats", (_req: Request, res: Response) => {
         SUM(CASE WHEN delivery_status = 'delivered' THEN 1 ELSE 0 END) as delivered,
         SUM(CASE WHEN opened_at IS NOT NULL THEN 1 ELSE 0 END) as opened,
         SUM(CASE WHEN clicked_at IS NOT NULL THEN 1 ELSE 0 END) as clicked,
+        SUM(CASE WHEN delivery_status = 'failed' OR status = 'failed' THEN 1 ELSE 0 END) as failed,
         SUM(CASE WHEN delivery_status = 'bounced' THEN 1 ELSE 0 END) as bounced,
         SUM(CASE WHEN delivery_status = 'complained' THEN 1 ELSE 0 END) as complained
       FROM send_logs`
@@ -192,6 +219,7 @@ router.get("/stats", (_req: Request, res: Response) => {
       delivered: engagement.delivered || 0,
       opened: engagement.opened || 0,
       clicked: engagement.clicked || 0,
+      failed: engagement.failed || 0,
       bounced: engagement.bounced || 0,
       complained: engagement.complained || 0,
       openRate: engagement.delivered
@@ -297,6 +325,7 @@ router.post("/campaigns/:id/test-send", async (req: Request, res: Response) => {
     subject: campaign.subject,
     bodyHtml: campaign.body_html,
     bodyText: campaign.body_text,
+    templateMode: campaign.template_mode,
   };
   const result = await sendTestEmail(email, content);
   if (result.success) {
@@ -379,6 +408,7 @@ router.post("/campaigns/:id/preview", (req: Request, res: Response) => {
     subject: campaign.subject,
     bodyHtml: campaign.body_html,
     bodyText: campaign.body_text,
+    templateMode: campaign.template_mode,
   };
   res.send(buildPreviewEmail(content, getRequestBaseUrl(req)));
 });
@@ -570,29 +600,48 @@ router.post("/subscribers/bulk-status", (req: Request, res: Response) => {
 router.get("/subscribers/export", (req: Request, res: Response) => {
   const db = getDb();
   const status = req.query.status as string;
+  const search = req.query.search as string;
+  const tagId = req.query.tagId as string;
 
   let where = "1=1";
   const params: any[] = [];
+  let join = "";
 
   if (status && status !== "all") {
-    where += " AND status = ?";
+    where += " AND s.status = ?";
     params.push(status);
+  }
+  if (search) {
+    where += " AND (s.email LIKE ? OR s.name LIKE ?)";
+    params.push(`%${search}%`, `%${search}%`);
+  }
+  if (tagId) {
+    join = "JOIN subscriber_tags st ON st.subscriber_id = s.id";
+    where += " AND st.tag_id = ?";
+    params.push(parseInt(tagId, 10));
   }
 
   const subscribers = db
     .prepare(
-      `SELECT email, name, status, send_count, last_sent_at, created_at
-       FROM subscribers WHERE ${where} ORDER BY created_at DESC`
+      `SELECT DISTINCT s.id, s.email, s.name, s.status, s.send_count, s.last_sent_at, s.created_at
+       FROM subscribers s ${join}
+       WHERE ${where}
+       ORDER BY s.created_at DESC`
     )
     .all(...params) as any[];
 
-  const header = "email,name,status,send_count,last_sent_at,created_at";
+  const header = "email,name,status,tags,send_count,last_sent_at,created_at";
   const rows = subscribers.map(
     (subscriber) =>
       [
         escapeCsvField(subscriber.email),
         escapeCsvField(subscriber.name || ""),
         escapeCsvField(subscriber.status),
+        escapeCsvField(
+          getSubscriberTags(subscriber.id)
+            .map((tag) => tag.name)
+            .join(";")
+        ),
         subscriber.send_count || 0,
         escapeCsvField(subscriber.last_sent_at || ""),
         escapeCsvField(subscriber.created_at),
@@ -606,6 +655,44 @@ router.get("/subscribers/export", (req: Request, res: Response) => {
     `attachment; filename="subscribers_${new Date().toISOString().slice(0, 10)}.csv"`
   );
   res.send(csv);
+});
+
+router.get("/unsubscribes", (req: Request, res: Response) => {
+  const db = getDb();
+  const limit = Math.min(
+    100,
+    Math.max(1, parseInt((req.query.limit as string) || "20", 10) || 20)
+  );
+
+  const recent = db
+    .prepare(
+      `SELECT
+         u.id,
+         u.reason,
+         u.unsubscribed_at,
+         s.id AS subscriber_id,
+         s.email,
+         s.name
+       FROM unsubscribes u
+       JOIN subscribers s ON s.id = u.subscriber_id
+       ORDER BY u.unsubscribed_at DESC
+       LIMIT ?`
+    )
+    .all(limit);
+
+  const reasons = db
+    .prepare(
+      `SELECT
+         COALESCE(NULLIF(reason, ''), 'unspecified') AS reason,
+         COUNT(*) AS count
+       FROM unsubscribes
+       GROUP BY COALESCE(NULLIF(reason, ''), 'unspecified')
+       ORDER BY count DESC, reason ASC
+       LIMIT 8`
+    )
+    .all();
+
+  res.json({ recent, reasons });
 });
 
 router.post(
@@ -792,7 +879,13 @@ router.delete("/email-assets/:id", (req: Request, res: Response) => {
 // ── Jobs ─────────────────────────────────
 router.get("/jobs", (req: Request, res: Response) => {
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
-  res.json({ jobs: listJobs({ status, limit: 50 }) });
+  res.json({
+    jobs: listJobs({ status, limit: 50 }).map((job) => ({
+      ...job,
+      payload: parseJsonValue(job.payload),
+      result: parseJsonValue(job.result),
+    })),
+  });
 });
 
 router.get("/jobs/:id", (req: Request, res: Response) => {
@@ -801,18 +894,26 @@ router.get("/jobs/:id", (req: Request, res: Response) => {
     res.status(404).json({ error: "Job not found" });
     return;
   }
-  // Parse JSON fields for convenience
   res.json({
     ...job,
-    payload: JSON.parse(job.payload || "{}"),
-    result: job.result ? JSON.parse(job.result) : null,
+    payload: parseJsonValue(job.payload),
+    result: parseJsonValue(job.result),
   });
 });
 
 router.get("/batches", (_req: Request, res: Response) => {
   const db = getDb();
   const batches = db
-    .prepare(`SELECT * FROM batches ORDER BY created_at DESC LIMIT 50`)
+    .prepare(
+      `SELECT
+         b.*,
+         c.name AS campaign_name,
+         c.subject AS campaign_subject
+       FROM batches b
+       LEFT JOIN campaigns c ON c.id = b.campaign_id
+       ORDER BY b.created_at DESC
+       LIMIT 50`
+    )
     .all();
   res.json({ batches });
 });

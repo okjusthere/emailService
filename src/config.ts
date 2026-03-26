@@ -28,6 +28,12 @@ function parseOrigins(value: string | undefined, fallbackOrigin: string): string
   );
 }
 
+function parseTemplateMode(
+  value: string | undefined
+): "personal" | "branded" {
+  return value === "branded" ? "branded" : "personal";
+}
+
 const defaultDataDir = path.join(process.cwd(), "data");
 
 export const config = {
@@ -54,6 +60,7 @@ export const config = {
   // Sending
   dailySendCount: parseIntEnv(process.env.DAILY_SEND_COUNT, 5000),
   batchSize: parseIntEnv(process.env.BATCH_SIZE, 100),
+  emailTemplateMode: parseTemplateMode(process.env.EMAIL_TEMPLATE_MODE),
 
   // IP Warmup: date you started sending (YYYY-MM-DD). Auto-limits volume for first 14 days.
   // Once you've been sending for 14+ days, this has no effect.

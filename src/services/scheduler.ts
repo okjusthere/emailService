@@ -40,6 +40,7 @@ async function processJob(job: Job): Promise<void> {
         subject: campaign.subject,
         bodyHtml: campaign.body_html,
         bodyText: campaign.body_text,
+        templateMode: campaign.template_mode,
       };
 
       // Ensure campaign is marked as sending

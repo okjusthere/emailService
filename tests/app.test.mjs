@@ -35,6 +35,13 @@ const {
 } = await import("../dist/services/subscriberService.js");
 const { createCampaign } = await import("../dist/services/campaignService.js");
 const {
+  buildRecruitmentEmail,
+  getDefaultTemplateMode,
+} = await import("../dist/templates/recruitmentEmail.js");
+const {
+  normalizeBatchSendPayload,
+} = await import("../dist/services/emailSender.js");
+const {
   createAdminSessionRecord,
   deleteAdminSessionToken,
   hasValidAdminSessionToken,
@@ -125,4 +132,44 @@ test("campaign recipient selection is deduplicated per campaign, not globally", 
   assert.deepEqual(remainingForB.sort(), ["alpha@example.com", "beta@example.com"]);
   assert.equal(countRemainingCampaignRecipients(campaignA.id), 1);
   assert.equal(countRemainingCampaignRecipients(campaignB.id), 2);
+});
+
+test("campaigns persist template mode and duplicates keep it", async () => {
+  const { duplicateCampaign, getCampaign } = await import(
+    "../dist/services/campaignService.js"
+  );
+
+  const campaign = createCampaign({
+    name: "Styled campaign",
+    template_mode: "branded",
+  });
+  const duplicate = duplicateCampaign(campaign.id);
+
+  assert.equal(getCampaign(campaign.id)?.template_mode, "branded");
+  assert.equal(duplicate?.template_mode, "branded");
+});
+
+test("email builder supports explicit branded template overrides", () => {
+  assert.equal(getDefaultTemplateMode(), "personal");
+
+  const html = buildRecruitmentEmail({
+    recipientName: "Alex",
+    subject: "Theme preview",
+    bodyHtml: "<p>Hello</p>",
+    unsubscribeUrl: "http://127.0.0.1:3000/unsubscribe",
+    templateMode: "branded",
+  });
+
+  assert.match(html, /Test Company/);
+  assert.match(html, /class="header"/);
+});
+
+test("batch send payload normalization reads Resend batch responses correctly", () => {
+  const modernPayload = normalizeBatchSendPayload({
+    data: [{ id: "email-1" }, { id: "email-2" }],
+  });
+  const legacyPayload = normalizeBatchSendPayload([{ id: "email-3" }]);
+
+  assert.deepEqual(modernPayload.data, [{ id: "email-1" }, { id: "email-2" }]);
+  assert.deepEqual(legacyPayload.data, [{ id: "email-3" }]);
 });

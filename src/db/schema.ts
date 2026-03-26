@@ -1,4 +1,5 @@
 import { getDb } from "./connection.js";
+import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
 
 export function runMigrations(): void {
@@ -60,6 +61,7 @@ export function runMigrations(): void {
       subject TEXT NOT NULL DEFAULT '',
       body_html TEXT NOT NULL DEFAULT '',
       body_text TEXT NOT NULL DEFAULT '',
+      template_mode TEXT NOT NULL DEFAULT '${config.emailTemplateMode}',
       status TEXT NOT NULL DEFAULT 'draft',
       tag_filter TEXT,
       sent_count INTEGER DEFAULT 0,
@@ -191,6 +193,20 @@ export function runMigrations(): void {
   if (!batchCols.some((c) => c.name === "campaign_id")) {
     db.exec(`ALTER TABLE batches ADD COLUMN campaign_id TEXT`);
   }
+
+  const campaignCols = db.pragma("table_info(campaigns)") as { name: string }[];
+  if (!campaignCols.some((c) => c.name === "template_mode")) {
+    db.exec(
+      `ALTER TABLE campaigns ADD COLUMN template_mode TEXT NOT NULL DEFAULT '${config.emailTemplateMode}'`
+    );
+  }
+  db.prepare(
+    `UPDATE campaigns
+     SET template_mode = ?
+     WHERE template_mode IS NULL
+        OR template_mode = ''
+        OR template_mode NOT IN ('personal', 'branded')`
+  ).run(config.emailTemplateMode);
 
   // Add confirmation_token + confirmed_at for Double Opt-in
   const subscriberCols = db.pragma("table_info(subscribers)") as { name: string }[];

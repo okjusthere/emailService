@@ -1,6 +1,10 @@
 import { randomUUID } from "crypto";
 import { getDb } from "../db/connection.js";
 import { logger } from "../utils/logger.js";
+import {
+  getDefaultTemplateMode,
+  type TemplateMode,
+} from "../templates/recruitmentEmail.js";
 
 export interface Campaign {
   id: string;
@@ -8,6 +12,7 @@ export interface Campaign {
   subject: string;
   body_html: string;
   body_text: string;
+  template_mode: TemplateMode;
   status: string;
   tag_filter: string | null;
   sent_count: number;
@@ -22,6 +27,7 @@ export interface CampaignStats {
   delivered: number;
   opened: number;
   clicked: number;
+  failed: number;
   bounced: number;
   complained: number;
 }
@@ -37,17 +43,40 @@ export function getCampaign(id: string): Campaign | undefined {
   return db.prepare("SELECT * FROM campaigns WHERE id = ?").get(id) as Campaign | undefined;
 }
 
-export function createCampaign(data: { name: string; subject?: string; body_html?: string; body_text?: string; tag_filter?: string | null }): Campaign {
+export function createCampaign(data: {
+  name: string;
+  subject?: string;
+  body_html?: string;
+  body_text?: string;
+  tag_filter?: string | null;
+  template_mode?: TemplateMode;
+}): Campaign {
   const db = getDb();
   const id = randomUUID();
   db.prepare(
-    `INSERT INTO campaigns (id, name, subject, body_html, body_text, tag_filter)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, data.name, data.subject || "", data.body_html || "", data.body_text || "", data.tag_filter || null);
+    `INSERT INTO campaigns (id, name, subject, body_html, body_text, template_mode, tag_filter)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    data.name,
+    data.subject || "",
+    data.body_html || "",
+    data.body_text || "",
+    data.template_mode || getDefaultTemplateMode(),
+    data.tag_filter || null
+  );
   return getCampaign(id)!;
 }
 
-export function updateCampaign(id: string, data: Partial<Pick<Campaign, "name" | "subject" | "body_html" | "body_text" | "tag_filter">>): Campaign | undefined {
+export function updateCampaign(
+  id: string,
+  data: Partial<
+    Pick<
+      Campaign,
+      "name" | "subject" | "body_html" | "body_text" | "tag_filter" | "template_mode"
+    >
+  >
+): Campaign | undefined {
   const db = getDb();
   const campaign = getCampaign(id);
   if (!campaign) return undefined;
@@ -60,6 +89,7 @@ export function updateCampaign(id: string, data: Partial<Pick<Campaign, "name" |
   if (data.subject !== undefined) { fields.push("subject = ?"); values.push(data.subject); }
   if (data.body_html !== undefined) { fields.push("body_html = ?"); values.push(data.body_html); }
   if (data.body_text !== undefined) { fields.push("body_text = ?"); values.push(data.body_text); }
+  if (data.template_mode !== undefined) { fields.push("template_mode = ?"); values.push(data.template_mode); }
   if (data.tag_filter !== undefined) { fields.push("tag_filter = ?"); values.push(data.tag_filter); }
 
   if (fields.length === 0) return campaign;
@@ -90,6 +120,7 @@ export function duplicateCampaign(id: string): Campaign | undefined {
     subject: original.subject,
     body_html: original.body_html,
     body_text: original.body_text,
+    template_mode: original.template_mode,
     tag_filter: original.tag_filter || undefined,
   });
 }
@@ -139,6 +170,7 @@ export function getCampaignStats(id: string): CampaignStats {
       SUM(CASE WHEN delivery_status = 'delivered' THEN 1 ELSE 0 END) as delivered,
       SUM(CASE WHEN opened_at IS NOT NULL THEN 1 ELSE 0 END) as opened,
       SUM(CASE WHEN clicked_at IS NOT NULL THEN 1 ELSE 0 END) as clicked,
+      SUM(CASE WHEN delivery_status = 'failed' OR status = 'failed' THEN 1 ELSE 0 END) as failed,
       SUM(CASE WHEN delivery_status = 'bounced' THEN 1 ELSE 0 END) as bounced,
       SUM(CASE WHEN delivery_status = 'complained' THEN 1 ELSE 0 END) as complained
     FROM send_logs WHERE campaign_id = ?`
@@ -149,6 +181,7 @@ export function getCampaignStats(id: string): CampaignStats {
     delivered: row.delivered || 0,
     opened: row.opened || 0,
     clicked: row.clicked || 0,
+    failed: row.failed || 0,
     bounced: row.bounced || 0,
     complained: row.complained || 0,
   };

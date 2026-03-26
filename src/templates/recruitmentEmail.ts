@@ -5,9 +5,18 @@ import { config } from "../config.js";
  * - "personal": Minimal HTML, looks like a 1-on-1 email → lands in Primary inbox
  * - "branded": Styled newsletter with header/footer → likely lands in Promotions
  */
-type TemplateMode = "personal" | "branded";
+export type TemplateMode = "personal" | "branded";
 
-const TEMPLATE_MODE: TemplateMode = (process.env.EMAIL_TEMPLATE_MODE as TemplateMode) || "personal";
+export function getDefaultTemplateMode(): TemplateMode {
+  return config.emailTemplateMode;
+}
+
+export function resolveTemplateMode(
+  value: unknown,
+  fallback: TemplateMode = getDefaultTemplateMode()
+): TemplateMode {
+  return value === "branded" || value === "personal" ? value : fallback;
+}
 
 /**
  * Generate HTML email body.
@@ -19,11 +28,16 @@ export function buildRecruitmentEmail(params: {
   subject: string;
   bodyHtml: string;
   unsubscribeUrl: string;
+  templateMode?: TemplateMode;
 }): string {
   const { recipientName, bodyHtml, unsubscribeUrl } = params;
   const greeting = recipientName ? `Hi ${recipientName},` : "Hi,";
+  const templateMode = resolveTemplateMode(
+    params.templateMode,
+    getDefaultTemplateMode()
+  );
 
-  if (TEMPLATE_MODE === "personal") {
+  if (templateMode === "personal") {
     return buildPersonalEmail(greeting, bodyHtml, unsubscribeUrl);
   }
   return buildBrandedEmail(greeting, params.subject, bodyHtml, unsubscribeUrl);
@@ -118,4 +132,3 @@ export function buildPlainText(params: {
     `Unsubscribe: ${params.unsubscribeUrl}`,
   ].join("\n");
 }
-
