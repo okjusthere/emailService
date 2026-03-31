@@ -30,6 +30,22 @@ export function handleWebhookEvent(event: ResendWebhookEvent): void {
     to: data.to,
   });
 
+  // Persist event to webhook_events table for audit trail
+  try {
+    db.prepare(
+      `INSERT INTO webhook_events (event_type, resend_email_id, recipient, subject, payload)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(
+      type,
+      data.email_id || null,
+      Array.isArray(data.to) ? data.to.join(", ") : data.to || null,
+      data.subject || null,
+      JSON.stringify(data)
+    );
+  } catch (err: any) {
+    logger.error(`Failed to persist webhook event: ${err.message}`);
+  }
+
   switch (type) {
     case "email.delivered": {
       db.prepare(

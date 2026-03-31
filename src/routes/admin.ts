@@ -933,6 +933,54 @@ router.get("/batches/:id/logs", (req: Request, res: Response) => {
   res.json({ logs });
 });
 
+// ── Webhook Events ───────────────────────
+router.get("/webhook-events", (req: Request, res: Response) => {
+  const db = getDb();
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit as string) || 50));
+  const eventType = req.query.type as string;
+
+  let where = "1=1";
+  const params: any[] = [];
+
+  if (eventType && eventType !== "all") {
+    where += " AND event_type = ?";
+    params.push(eventType);
+  }
+
+  const events = db
+    .prepare(
+      `SELECT id, event_type, resend_email_id, recipient, subject, payload, created_at
+       FROM webhook_events
+       WHERE ${where}
+       ORDER BY created_at DESC
+       LIMIT ?`
+    )
+    .all(...params, limit);
+
+  // Summary counts by event type
+  const summary = db
+    .prepare(
+      `SELECT event_type, COUNT(*) as count
+       FROM webhook_events
+       GROUP BY event_type
+       ORDER BY count DESC`
+    )
+    .all() as { event_type: string; count: number }[];
+
+  // Recent 24h counts
+  const last24h = db
+    .prepare(
+      `SELECT event_type, COUNT(*) as count
+       FROM webhook_events
+       WHERE created_at >= datetime('now', '-24 hours')
+       GROUP BY event_type
+       ORDER BY count DESC`
+    )
+    .all() as { event_type: string; count: number }[];
+
+  res.json({ events, summary, last24h });
+});
+
 router.get("/me", (_req: Request, res: Response) => {
   res.json({ authenticated: true });
 });

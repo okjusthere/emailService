@@ -124,6 +124,21 @@ export function runMigrations(): void {
 
     CREATE INDEX IF NOT EXISTS idx_rate_limit_scope_key_created
       ON rate_limit_events(scope, key, created_at);
+
+    -- Webhook event log (audit trail for all Resend webhook events)
+    CREATE TABLE IF NOT EXISTS webhook_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_type TEXT NOT NULL,
+      resend_email_id TEXT,
+      recipient TEXT,
+      subject TEXT,
+      payload TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_webhook_events_type ON webhook_events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_webhook_events_resend_id ON webhook_events(resend_email_id);
+    CREATE INDEX IF NOT EXISTS idx_webhook_events_created ON webhook_events(created_at DESC);
   `);
 
   // Add campaign_id to send_logs if not present

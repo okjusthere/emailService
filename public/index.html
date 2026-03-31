@@ -445,6 +445,49 @@
         <div class="page-header">
           <h1>Send History</h1>
         </div>
+
+        <!-- Webhook Event Summary -->
+        <div class="card">
+          <div class="section-heading">
+            <div>
+              <h3>🔔 Webhook Tracking</h3>
+              <p class="section-note">Real-time delivery signals from Resend. Every event (delivered, opened, clicked, bounced, complained) is logged here.</p>
+            </div>
+            <div class="header-actions">
+              <select id="webhook-type-filter" class="btn-secondary" style="padding:6px 10px;border-radius:8px;font-size:13px">
+                <option value="all">All Events</option>
+                <option value="email.delivered">Delivered</option>
+                <option value="email.opened">Opened</option>
+                <option value="email.clicked">Clicked</option>
+                <option value="email.bounced">Bounced</option>
+                <option value="email.complained">Complained</option>
+              </select>
+              <button id="refresh-webhooks" class="btn-secondary btn-sm">🔄 Refresh</button>
+            </div>
+          </div>
+
+          <!-- 24h stats chips -->
+          <div id="webhook-summary-chips" class="engagement-grid" style="margin-bottom:16px"></div>
+
+          <div class="simple-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Event</th>
+                  <th>Recipient</th>
+                  <th>Subject</th>
+                  <th>Email ID</th>
+                  <th>Time</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="webhook-events-body">
+                <tr><td colspan="6" class="center">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <div class="card">
           <div class="section-heading">
             <div>
@@ -481,10 +524,35 @@
               <div id="batch-logs-summary" class="field-tip" style="margin-bottom:12px"></div>
               <div class="simple-table-wrap">
                 <table>
-                  <thead><tr><th>Email</th><th>Status</th><th>Delivery</th><th>Error</th><th>Sent</th></tr></thead>
-                  <tbody id="batch-logs-body"><tr><td colspan="5" class="center">Loading...</td></tr></tbody>
+                  <thead>
+                    <tr>
+                      <th>Email</th>
+                      <th>Status</th>
+                      <th>Delivery</th>
+                      <th>Delivered</th>
+                      <th>Opened</th>
+                      <th>Clicked</th>
+                      <th>Bounced</th>
+                      <th>Error</th>
+                      <th>Sent</th>
+                    </tr>
+                  </thead>
+                  <tbody id="batch-logs-body"><tr><td colspan="9" class="center">Loading...</td></tr></tbody>
                 </table>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Webhook Event Detail Modal -->
+        <div id="webhook-detail-modal" class="modal hidden">
+          <div class="modal-content modal-wide">
+            <div class="modal-header">
+              <h3>📋 Webhook Event Details</h3>
+              <button class="modal-close" data-close="webhook-detail-modal">✕</button>
+            </div>
+            <div class="modal-body">
+              <pre id="webhook-detail-payload" style="background:var(--surface-alt,#1e293b);color:var(--text-primary,#e2e8f0);padding:16px;border-radius:12px;overflow-x:auto;font-size:13px;line-height:1.5;max-height:400px;overflow-y:auto"></pre>
             </div>
           </div>
         </div>

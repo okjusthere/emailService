@@ -106,7 +106,7 @@ function navigateTo(page) {
   if (page === "dashboard") loadDashboard();
   else if (page === "subscribers") { loadTags(); loadSubscribers(); loadUnsubscribeInsights(); }
   else if (page === "campaigns") { loadTags(); loadCampaignList(); }
-  else if (page === "history") loadHistory();
+  else if (page === "history") { loadHistory(); loadWebhookEvents(); }
 }
 
 // ── Dashboard ────────────────────────────
@@ -576,13 +576,17 @@ async function openBatchLogs(batchId) {
     summary.textContent = `Batch ${batchId.slice(0, 8)} — ${logs.length} recent delivery records`;
 
     if (!logs.length) {
-      body.innerHTML = '<tr><td colspan="5" class="center">No logs for this batch yet.</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" class="center">No logs for this batch yet.</td></tr>';
     } else {
       body.innerHTML = logs.map((log) => `
         <tr>
           <td>${escapeHtml(log.email || "—")}</td>
           <td>${escapeHtml(log.status || "—")}</td>
-          <td>${escapeHtml(log.delivery_status || "—")}</td>
+          <td><span class="badge badge-${log.delivery_status || 'pending'}">${escapeHtml(log.delivery_status || "pending")}</span></td>
+          <td>${log.delivered_at ? formatDate(log.delivered_at) : "—"}</td>
+          <td>${log.opened_at ? `<span class="webhook-dot green"></span> ${formatDate(log.opened_at)}` : "—"}</td>
+          <td>${log.clicked_at ? `<span class="webhook-dot blue"></span> ${formatDate(log.clicked_at)}` : "—"}</td>
+          <td>${log.bounced_at ? `<span class="webhook-dot red"></span> ${formatDate(log.bounced_at)}` : "—"}</td>
           <td>${escapeHtml(log.error_message || "—")}</td>
           <td>${log.sent_at ? formatDate(log.sent_at) : "—"}</td>
         </tr>
@@ -596,6 +600,98 @@ async function openBatchLogs(batchId) {
 }
 
 window.openBatchLogs = openBatchLogs;
+
+// ── Webhook Events ──────────────────────
+const webhookEventColors = {
+  "email.delivered": "green",
+  "email.opened": "blue",
+  "email.clicked": "purple",
+  "email.bounced": "red",
+  "email.complained": "orange",
+};
+
+const webhookEventEmojis = {
+  "email.delivered": "✅",
+  "email.opened": "👁",
+  "email.clicked": "🔗",
+  "email.bounced": "🚫",
+  "email.complained": "⚠️",
+};
+
+function webhookEventBadge(eventType) {
+  const color = webhookEventColors[eventType] || "teal";
+  const label = eventType.replace("email.", "");
+  return `<span class="badge badge-${color}">${label}</span>`;
+}
+
+async function loadWebhookEvents() {
+  const typeFilter = document.getElementById("webhook-type-filter")?.value || "all";
+  try {
+    const params = new URLSearchParams({ limit: "100" });
+    if (typeFilter && typeFilter !== "all") params.set("type", typeFilter);
+
+    const res = await api(`/webhook-events?${params.toString()}`);
+    const data = await res.json();
+    const tbody = document.getElementById("webhook-events-body");
+    const chipsContainer = document.getElementById("webhook-summary-chips");
+
+    // Render 24h summary chips
+    if (chipsContainer) {
+      const last24h = data.last24h || [];
+      if (last24h.length === 0) {
+        chipsContainer.innerHTML = '<div class="engagement-item"><span class="engagement-value">0</span><span class="engagement-label">Events (24h)</span></div>';
+      } else {
+        chipsContainer.innerHTML = last24h.map((item) => {
+          const emoji = webhookEventEmojis[item.event_type] || "📧";
+          const label = item.event_type.replace("email.", "");
+          const color = webhookEventColors[item.event_type] || "";
+          return `<div class="engagement-item"><span class="engagement-value ${color}">${emoji} ${item.count}</span><span class="engagement-label">${label} (24h)</span></div>`;
+        }).join("");
+      }
+    }
+
+    const events = data.events || [];
+    if (!events.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="center">No webhook events yet. Configure your Resend webhook to start tracking deliveries.</td></tr>';
+    } else {
+      tbody.innerHTML = events.map((evt) => `
+        <tr>
+          <td>${webhookEventBadge(evt.event_type)}</td>
+          <td>${escapeHtml(evt.recipient || "—")}</td>
+          <td title="${escapeHtml(evt.subject || "")}">${escapeHtml(truncateText(evt.subject || "—", 40))}</td>
+          <td><code style="font-size:11px">${escapeHtml(evt.resend_email_id ? evt.resend_email_id.slice(0, 12) + "..." : "—")}</code></td>
+          <td>${formatDate(evt.created_at)}</td>
+          <td><button class="btn-secondary btn-sm webhook-detail-btn" data-payload="${escapeHtml(evt.payload || '{}')}">View</button></td>
+        </tr>
+      `).join("");
+
+      // Bind detail buttons
+      tbody.querySelectorAll(".webhook-detail-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          try {
+            const payload = JSON.parse(btn.dataset.payload || "{}");
+            document.getElementById("webhook-detail-payload").textContent = JSON.stringify(payload, null, 2);
+          } catch {
+            document.getElementById("webhook-detail-payload").textContent = btn.dataset.payload || "{}";
+          }
+          openModal("webhook-detail-modal");
+        });
+      });
+    }
+  } catch {
+    toast("Failed to load webhook events", "error");
+  }
+}
+
+function truncateText(text, maxLen) {
+  if (!text || text.length <= maxLen) return text;
+  return text.slice(0, maxLen) + "…";
+}
+
+window.loadWebhookEvents = loadWebhookEvents;
+
+document.getElementById("webhook-type-filter")?.addEventListener("change", loadWebhookEvents);
+document.getElementById("refresh-webhooks")?.addEventListener("click", loadWebhookEvents);
 
 // ── Modals ───────────────────────────────
 function openModal(id) { document.getElementById(id).classList.remove("hidden"); }
