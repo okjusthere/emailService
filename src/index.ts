@@ -1,10 +1,11 @@
 import express from "express";
+import type { Server } from "node:http";
 import path from "path";
 import { fileURLToPath } from "url";
 import { config } from "./config.js";
-import { getDatabasePath, getDb } from "./db/connection.js";
+import { closeDb, getDatabasePath, getDb } from "./db/connection.js";
 import { runMigrations } from "./db/schema.js";
-import { isWorkerRunning, startWorker } from "./services/scheduler.js";
+import { isWorkerRunning, startWorker, stopWorker } from "./services/scheduler.js";
 import webhookRoutes from "./routes/webhook.js";
 import unsubscribeRoutes from "./routes/unsubscribe.js";
 import adminRoutes from "./routes/admin.js";
@@ -13,13 +14,8 @@ import { pruneExpiredAdminSessions } from "./services/runtimeStateService.js";
 import { logger } from "./utils/logger.js";
 
 const currentFile = fileURLToPath(import.meta.url);
-
-function formatError(err: unknown): unknown {
-  if (err instanceof Error) {
-    return { message: err.message, stack: err.stack };
-  }
-  return err;
-}
+let server: Server | undefined;
+let shuttingDown = false;
 
 export function createApp(): express.Express {
   const app = express();
@@ -132,6 +128,45 @@ document.getElementById("email-subscribe-form").addEventListener("submit",async 
 
 export const app = createApp();
 
+function exitProcess(code: number): void {
+  process.exitCode = code;
+  setTimeout(() => process.exit(code), 50).unref();
+}
+
+function shutdown(code: number): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  stopWorker();
+
+  const finalize = () => {
+    try {
+      closeDb();
+    } catch (error) {
+      logger.error("Failed to close database during shutdown", error);
+    }
+    exitProcess(code);
+  };
+
+  if (!server) {
+    finalize();
+    return;
+  }
+
+  const forceExitTimer = setTimeout(finalize, 1000);
+  forceExitTimer.unref();
+
+  server.close(() => {
+    clearTimeout(forceExitTimer);
+    finalize();
+  });
+}
+
+function handleFatalError(label: string, error: unknown): void {
+  logger.error(label, error);
+  shutdown(1);
+}
+
 export function bootstrap(): void {
   try {
     logger.info("Bootstrap start");
@@ -146,7 +181,7 @@ export function bootstrap(): void {
     startWorker();
 
     logger.info("Starting HTTP server");
-    app.listen(config.port, () => {
+    server = app.listen(config.port, () => {
       logger.success(`Email Service running on port ${config.port}`);
       logger.info(`  Admin:       http://localhost:${config.port}/admin`);
       logger.info(`  Health:      http://localhost:${config.port}/health`);
@@ -154,17 +189,26 @@ export function bootstrap(): void {
       logger.info(`  Unsubscribe: http://localhost:${config.port}/unsubscribe?token=xxx`);
     });
   } catch (err) {
-    logger.error("Bootstrap failed", formatError(err));
-    process.exit(1);
+    handleFatalError("Bootstrap failed", err);
   }
 }
 
 process.on("uncaughtException", (err) => {
-  logger.error("Uncaught exception", formatError(err));
+  handleFatalError("Uncaught exception", err);
 });
 
 process.on("unhandledRejection", (reason) => {
-  logger.error("Unhandled rejection", formatError(reason));
+  handleFatalError("Unhandled rejection", reason);
+});
+
+process.on("SIGINT", () => {
+  logger.info("Received SIGINT, shutting down");
+  shutdown(0);
+});
+
+process.on("SIGTERM", () => {
+  logger.info("Received SIGTERM, shutting down");
+  shutdown(0);
 });
 
 if (process.argv[1] && path.resolve(process.argv[1]) === currentFile) {

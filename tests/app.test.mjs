@@ -42,6 +42,10 @@ const {
   normalizeBatchSendPayload,
 } = await import("../dist/services/emailSender.js");
 const {
+  logger,
+  logFilePath,
+} = await import("../dist/utils/logger.js");
+const {
   createAdminSessionRecord,
   deleteAdminSessionToken,
   hasValidAdminSessionToken,
@@ -172,4 +176,29 @@ test("batch send payload normalization reads Resend batch responses correctly", 
 
   assert.deepEqual(modernPayload.data, [{ id: "email-1" }, { id: "email-2" }]);
   assert.deepEqual(legacyPayload.data, [{ id: "email-3" }]);
+});
+
+test("logger survives broken stderr pipes by falling back to a log file", () => {
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  let intercepted = 0;
+
+  process.stderr.write = (() => {
+    intercepted += 1;
+    const error = new Error("broken pipe");
+    error.code = "EPIPE";
+    throw error;
+  });
+
+  try {
+    assert.doesNotThrow(() => {
+      logger.error("Broken stderr test", { intercepted });
+      logger.error("Broken stderr retry", { intercepted });
+    });
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+
+  const contents = fs.readFileSync(logFilePath, "utf8");
+  assert.match(contents, /Broken stderr test/);
+  assert.match(contents, /Broken stderr retry/);
 });
