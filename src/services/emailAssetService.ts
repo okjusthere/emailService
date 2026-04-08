@@ -185,7 +185,8 @@ export function resolveAssetPlaceholdersToInlineAttachments(
       attachmentsById.set(assetId, {
         contentId,
         attachment: {
-          content: fs.readFileSync(filePath),
+          // Resend expects attachment content to be a base64 string in the JSON payload.
+          content: fs.readFileSync(filePath).toString("base64"),
           contentId,
           contentType: asset.mimeType,
           filename: asset.originalName,

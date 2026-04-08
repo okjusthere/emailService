@@ -42,6 +42,10 @@ const {
   normalizeBatchSendPayload,
 } = await import("../dist/services/emailSender.js");
 const {
+  createEmailAsset,
+  resolveAssetPlaceholdersToInlineAttachments,
+} = await import("../dist/services/emailAssetService.js");
+const {
   logger,
   logFilePath,
 } = await import("../dist/utils/logger.js");
@@ -176,6 +180,31 @@ test("batch send payload normalization reads Resend batch responses correctly", 
 
   assert.deepEqual(modernPayload.data, [{ id: "email-1" }, { id: "email-2" }]);
   assert.deepEqual(legacyPayload.data, [{ id: "email-3" }]);
+});
+
+test("inline email assets resolve to cid attachments with base64 content", () => {
+  const imageBuffer = Buffer.from("fake-image-content");
+  const asset = createEmailAsset({
+    buffer: imageBuffer,
+    originalName: "banner.png",
+    mimeType: "image/png",
+    size: imageBuffer.length,
+    baseUrl: "http://127.0.0.1:3000",
+  });
+
+  const resolved = resolveAssetPlaceholdersToInlineAttachments(
+    `<p>Hello</p><img src="${asset.placeholder}" alt="Banner">`
+  );
+
+  assert.equal(resolved.missingAssetIds.length, 0);
+  assert.equal(resolved.attachments.length, 1);
+  assert.match(resolved.html, new RegExp(`cid:asset-${asset.id}@email-service`));
+  assert.equal(
+    resolved.attachments[0].content,
+    imageBuffer.toString("base64")
+  );
+  assert.equal(resolved.attachments[0].contentId, `asset-${asset.id}@email-service`);
+  assert.equal(resolved.attachments[0].contentType, "image/png");
 });
 
 test("logger survives broken stderr pipes by falling back to a log file", () => {
