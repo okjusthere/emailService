@@ -922,7 +922,11 @@ function insertHtmlSnippet(snippetName) {
 }
 
 function buildAssetImageHtml(asset) {
-  return `<p><img src="${asset.placeholder}" alt="${escapeHtml(asset.originalName || "Email image")}" style="max-width:100%;height:auto;border-radius:12px;"></p>`;
+  return [
+    '<p style="margin:16px 0;text-align:center;">',
+    `<img src="${asset.placeholder}" alt="${escapeHtml(asset.originalName || "Email image")}" width="560" style="display:block;width:100%;max-width:560px;height:auto;margin:0 auto;border:0;border-radius:12px;outline:none;text-decoration:none;">`,
+    "</p>",
+  ].join("");
 }
 
 function renderAssetCards(assets) {

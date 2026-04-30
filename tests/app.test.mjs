@@ -50,6 +50,9 @@ const {
   logFilePath,
 } = await import("../dist/utils/logger.js");
 const {
+  sanitizeEmailHtml,
+} = await import("../dist/utils/emailHtml.js");
+const {
   createAdminSessionRecord,
   deleteAdminSessionToken,
   hasValidAdminSessionToken,
@@ -205,6 +208,18 @@ test("inline email assets resolve to cid attachments with base64 content", () =>
   );
   assert.equal(resolved.attachments[0].contentId, `asset-${asset.id}@email-service`);
   assert.equal(resolved.attachments[0].contentType, "image/png");
+});
+
+test("asset images are normalized to an email-safe responsive width", () => {
+  const html = sanitizeEmailHtml(
+    '<p><img src="{{asset:abc-123}}" alt="Banner" style="max-width:100%;height:auto;border-radius:12px;"></p>'
+  );
+
+  assert.match(html, /width="560"/);
+  assert.match(html, /width:100%/);
+  assert.match(html, /max-width:560px/);
+  assert.match(html, /height:auto/);
+  assert.match(html, /display:block/);
 });
 
 test("logger survives broken stderr pipes by falling back to a log file", () => {
