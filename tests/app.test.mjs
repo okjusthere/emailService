@@ -53,6 +53,9 @@ const {
   sanitizeEmailHtml,
 } = await import("../dist/utils/emailHtml.js");
 const {
+  handleWebhookEvent,
+} = await import("../dist/webhooks/resendWebhook.js");
+const {
   createAdminSessionRecord,
   deleteAdminSessionToken,
   hasValidAdminSessionToken,
@@ -145,6 +148,29 @@ test("campaign recipient selection is deduplicated per campaign, not globally", 
   assert.equal(countRemainingCampaignRecipients(campaignB.id), 2);
 });
 
+test("failed campaign recipients are not repeatedly selected in later chunks", () => {
+  addSubscriber("failed@example.com", "Failed");
+  addSubscriber("next@example.com", "Next");
+
+  const campaign = createCampaign({ name: "Failure dedupe" });
+  const db = getDb();
+  const failed = findByEmail("failed@example.com");
+
+  assert.ok(failed);
+
+  db.prepare(
+    `INSERT INTO send_logs (batch_id, subscriber_id, status, error_message, campaign_id, delivery_status)
+     VALUES (?, ?, 'failed', 'Transient API error', ?, 'failed')`
+  ).run("batch-failed", failed.id, campaign.id);
+
+  const remaining = getNextCampaignBatch(campaign.id, 10).map(
+    (subscriber) => subscriber.email
+  );
+
+  assert.deepEqual(remaining, ["next@example.com"]);
+  assert.equal(countRemainingCampaignRecipients(campaign.id), 1);
+});
+
 test("campaigns persist template mode and duplicates keep it", async () => {
   const { duplicateCampaign, getCampaign } = await import(
     "../dist/services/campaignService.js"
@@ -220,6 +246,63 @@ test("asset images are normalized to an email-safe responsive width", () => {
   assert.match(html, /max-width:560px/);
   assert.match(html, /height:auto/);
   assert.match(html, /display:block/);
+});
+
+test("webhook suppression and delayed events update delivery state", () => {
+  addSubscriber("suppressed@example.com", "Suppressed");
+  addSubscriber("delayed@example.com", "Delayed");
+
+  const db = getDb();
+  const suppressed = findByEmail("suppressed@example.com");
+  const delayed = findByEmail("delayed@example.com");
+
+  assert.ok(suppressed);
+  assert.ok(delayed);
+
+  db.prepare(
+    `INSERT INTO send_logs (batch_id, subscriber_id, resend_email_id, status, sent_at, campaign_id, delivery_status)
+     VALUES (?, ?, ?, 'sent', datetime('now'), ?, 'sent')`
+  ).run("batch-webhook", suppressed.id, "email-suppressed", "campaign-webhook");
+  db.prepare(
+    `INSERT INTO send_logs (batch_id, subscriber_id, resend_email_id, status, sent_at, campaign_id, delivery_status)
+     VALUES (?, ?, ?, 'sent', datetime('now'), ?, 'sent')`
+  ).run("batch-webhook", delayed.id, "email-delayed", "campaign-webhook");
+
+  handleWebhookEvent({
+    type: "email.suppressed",
+    data: {
+      email_id: "email-suppressed",
+      from: "sender@example.com",
+      to: ["suppressed@example.com"],
+      subject: "Suppressed",
+      created_at: new Date().toISOString(),
+      suppressed: { message: "On account suppression list" },
+    },
+  });
+  handleWebhookEvent({
+    type: "email.delivery_delayed",
+    data: {
+      email_id: "email-delayed",
+      from: "sender@example.com",
+      to: ["delayed@example.com"],
+      subject: "Delayed",
+      created_at: new Date().toISOString(),
+    },
+  });
+
+  const suppressedLog = db
+    .prepare("SELECT status, delivery_status, error_message FROM send_logs WHERE resend_email_id = ?")
+    .get("email-suppressed");
+  const delayedLog = db
+    .prepare("SELECT status, delivery_status, error_message FROM send_logs WHERE resend_email_id = ?")
+    .get("email-delayed");
+
+  assert.equal(findByEmail("suppressed@example.com")?.status, "suppressed");
+  assert.equal(suppressedLog.status, "failed");
+  assert.equal(suppressedLog.delivery_status, "suppressed");
+  assert.match(suppressedLog.error_message, /suppression/i);
+  assert.equal(delayedLog.status, "sent");
+  assert.equal(delayedLog.delivery_status, "delayed");
 });
 
 test("logger survives broken stderr pipes by falling back to a log file", () => {

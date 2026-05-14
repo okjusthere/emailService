@@ -16,6 +16,17 @@ interface ResendWebhookEvent {
   };
 }
 
+function extractWebhookMessage(data: ResendWebhookEvent["data"], key: string): string | null {
+  const value = data[key];
+
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const message = (value as { message?: unknown }).message;
+  return typeof message === "string" && message.trim() ? message.trim() : null;
+}
+
 /**
  * Handle incoming webhook events from Resend.
  *
@@ -91,6 +102,52 @@ export function handleWebhookEvent(event: ResendWebhookEvent): void {
         const updated = updateSubscriberStatus(email, "complained");
         if (updated) {
           logger.warn(`Subscriber complained and deactivated: ${email}`);
+        }
+      }
+      break;
+    }
+
+    case "email.delivery_delayed": {
+      db.prepare(
+        `UPDATE send_logs
+         SET delivery_status = CASE
+               WHEN delivery_status IN ('delivered', 'bounced', 'complained', 'suppressed', 'failed') THEN delivery_status
+               ELSE 'delayed'
+             END,
+             error_message = COALESCE(error_message, ?)
+         WHERE resend_email_id = ?`
+      ).run("Recipient mail server delayed delivery", data.email_id);
+      break;
+    }
+
+    case "email.failed": {
+      db.prepare(
+        `UPDATE send_logs
+         SET status = 'failed',
+             delivery_status = 'failed',
+             error_message = COALESCE(?, error_message, 'Resend reported final delivery failure')
+         WHERE resend_email_id = ?`
+      ).run(extractWebhookMessage(data, "failed"), data.email_id);
+      break;
+    }
+
+    case "email.suppressed": {
+      const message =
+        extractWebhookMessage(data, "suppressed") ||
+        "Resend suppressed this recipient because of prior bounce or complaint";
+
+      db.prepare(
+        `UPDATE send_logs
+         SET status = 'failed',
+             delivery_status = 'suppressed',
+             error_message = COALESCE(?, error_message)
+         WHERE resend_email_id = ?`
+      ).run(message, data.email_id);
+
+      for (const email of data.to) {
+        const updated = updateSubscriberStatus(email, "suppressed");
+        if (updated) {
+          logger.warn(`Subscriber suppressed by Resend: ${email}`);
         }
       }
       break;

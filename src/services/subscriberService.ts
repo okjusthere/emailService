@@ -36,7 +36,6 @@ export function getNextCampaignBatch(
           SELECT 1 FROM send_logs sl
           WHERE sl.subscriber_id = s.id
             AND sl.campaign_id = ?
-            AND sl.status != 'failed'
         )
       ORDER BY
         CASE WHEN s.last_sent_at IS NULL THEN 0 ELSE 1 END,
@@ -53,7 +52,6 @@ export function getNextCampaignBatch(
         SELECT 1 FROM send_logs sl
         WHERE sl.subscriber_id = s.id
           AND sl.campaign_id = ?
-          AND sl.status != 'failed'
       )
     ORDER BY
       CASE WHEN s.last_sent_at IS NULL THEN 0 ELSE 1 END,
@@ -81,7 +79,6 @@ export function countRemainingCampaignRecipients(
           SELECT 1 FROM send_logs sl
           WHERE sl.subscriber_id = s.id
             AND sl.campaign_id = ?
-            AND sl.status != 'failed'
         )
     `).get(...tagIds, campaignId) as { count: number };
     return row.count || 0;
@@ -95,7 +92,6 @@ export function countRemainingCampaignRecipients(
         SELECT 1 FROM send_logs sl
         WHERE sl.subscriber_id = s.id
           AND sl.campaign_id = ?
-          AND sl.status != 'failed'
       )
   `).get(campaignId) as { count: number };
 
@@ -267,6 +263,7 @@ export function getStats(): {
   unsubscribed: number;
   bounced: number;
   complained: number;
+  suppressed: number;
 } {
   const db = getDb();
   const row = db
@@ -276,7 +273,8 @@ export function getStats(): {
         SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
         SUM(CASE WHEN status = 'unsubscribed' THEN 1 ELSE 0 END) as unsubscribed,
         SUM(CASE WHEN status = 'bounced' THEN 1 ELSE 0 END) as bounced,
-        SUM(CASE WHEN status = 'complained' THEN 1 ELSE 0 END) as complained
+        SUM(CASE WHEN status = 'complained' THEN 1 ELSE 0 END) as complained,
+        SUM(CASE WHEN status = 'suppressed' THEN 1 ELSE 0 END) as suppressed
       FROM subscribers`
     )
     .get() as any;

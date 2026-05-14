@@ -29,7 +29,8 @@ This project is intentionally not a full SMTP platform. It focuses on the operat
 
 ### Compliance And Safety
 - Unsubscribe links and `List-Unsubscribe` headers
-- Bounce/complaint webhooks automatically suppress future sends
+- Bounce/complaint/suppression webhooks automatically suppress future sends
+- Delivery delayed, failed, and suppressed events are surfaced in admin history
 - Public subscribe endpoint supports double opt-in, resend cooldowns, per-IP / per-email rate limiting, and a honeypot field
 - Admin HTML is sanitized on save/send and previewed inside a sandboxed iframe
 - Resend webhook signatures are verified against the raw request body
@@ -100,10 +101,12 @@ CONFIRMATION_RESEND_COOLDOWN_MINUTES=15
 
 Notes:
 
+- `BASE_URL` should be a real HTTPS origin in production. If you accidentally provide a bare domain, the service normalizes it to `https://...` before generating unsubscribe links.
 - `SUBSCRIBE_ALLOWED_ORIGINS` should list every origin allowed to host your embedded subscribe form. If omitted, it defaults to `BASE_URL`'s origin.
 - In production, `RESEND_WEBHOOK_SECRET` should always be set.
 - `API_SECRET` is still accepted on `x-api-secret` for scripted admin API access, but the browser admin uses a session cookie after login.
 - `DATABASE_PATH` overrides the SQLite file directly; otherwise it lives under `DATA_DIR`.
+- Open and click tracking are controlled in Resend's domain settings. For cold or reputation-sensitive sends, prefer a custom tracking domain or disable tracking in Resend.
 
 ## Verification
 

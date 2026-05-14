@@ -61,6 +61,7 @@
           <div class="stat-card orange"><div class="stat-value" id="stat-unsubscribed">-</div><div class="stat-label">Unsubscribed</div></div>
           <div class="stat-card red"><div class="stat-value" id="stat-bounced">-</div><div class="stat-label">Bounced</div></div>
           <div class="stat-card purple"><div class="stat-value" id="stat-complained">-</div><div class="stat-label">Complained</div></div>
+          <div class="stat-card teal"><div class="stat-value" id="stat-suppressed">-</div><div class="stat-label">Suppressed</div></div>
           <div class="stat-card teal"><div class="stat-value" id="stat-today">-</div><div class="stat-label">Sent Today</div></div>
         </div>
 
@@ -73,6 +74,8 @@
             <div class="engagement-item"><span class="engagement-value green" id="eng-open-rate">0%</span><span class="engagement-label">Open Rate</span></div>
             <div class="engagement-item"><span class="engagement-value blue" id="eng-click-rate">0%</span><span class="engagement-label">Click Rate</span></div>
             <div class="engagement-item"><span class="engagement-value red" id="eng-bounce-rate">0%</span><span class="engagement-label">Bounce Rate</span></div>
+            <div class="engagement-item"><span class="engagement-value orange" id="eng-delayed">0</span><span class="engagement-label">Delayed</span></div>
+            <div class="engagement-item"><span class="engagement-value red" id="eng-suppressed">0</span><span class="engagement-label">Suppressed</span></div>
           </div>
         </div>
 
@@ -167,6 +170,7 @@
             <option value="unsubscribed">Unsubscribed</option>
             <option value="bounced">Bounced</option>
             <option value="complained">Complained</option>
+            <option value="suppressed">Suppressed</option>
           </select>
           <select id="tag-filter">
             <option value="">All Tags</option>
@@ -461,6 +465,9 @@
                 <option value="email.clicked">Clicked</option>
                 <option value="email.bounced">Bounced</option>
                 <option value="email.complained">Complained</option>
+                <option value="email.delivery_delayed">Delivery Delayed</option>
+                <option value="email.suppressed">Suppressed</option>
+                <option value="email.failed">Failed</option>
               </select>
               <button id="refresh-webhooks" class="btn-secondary btn-sm">🔄 Refresh</button>
             </div>

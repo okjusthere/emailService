@@ -34,7 +34,22 @@ function parseTemplateMode(
   return value === "branded" ? "branded" : "personal";
 }
 
+function normalizeBaseUrl(value: string | undefined): string {
+  const rawValue = (value || "http://localhost:3000").trim().replace(/\/+$/g, "");
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawValue)) {
+    return rawValue;
+  }
+
+  if (rawValue.startsWith("localhost") || rawValue.startsWith("127.0.0.1")) {
+    return `http://${rawValue}`;
+  }
+
+  return `https://${rawValue}`;
+}
+
 const defaultDataDir = path.join(process.cwd(), "data");
+const baseUrl = normalizeBaseUrl(process.env.BASE_URL);
 
 export const config = {
   // Resend
@@ -50,7 +65,7 @@ export const config = {
   // Server
   nodeEnv: process.env.NODE_ENV || "development",
   port: parseIntEnv(process.env.PORT, 3000),
-  baseUrl: process.env.BASE_URL || "http://localhost:3000",
+  baseUrl,
   dataDir: process.env.DATA_DIR || defaultDataDir,
   databasePath:
     process.env.DATABASE_PATH ||

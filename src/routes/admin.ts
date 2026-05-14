@@ -198,10 +198,12 @@ router.get("/stats", (_req: Request, res: Response) => {
         SUM(CASE WHEN status != 'failed' THEN 1 ELSE 0 END) as total_sent,
         SUM(CASE WHEN delivery_status = 'delivered' THEN 1 ELSE 0 END) as delivered,
         SUM(CASE WHEN opened_at IS NOT NULL THEN 1 ELSE 0 END) as opened,
-        SUM(CASE WHEN clicked_at IS NOT NULL THEN 1 ELSE 0 END) as clicked,
-        SUM(CASE WHEN delivery_status = 'failed' OR status = 'failed' THEN 1 ELSE 0 END) as failed,
-        SUM(CASE WHEN delivery_status = 'bounced' THEN 1 ELSE 0 END) as bounced,
-        SUM(CASE WHEN delivery_status = 'complained' THEN 1 ELSE 0 END) as complained
+      SUM(CASE WHEN clicked_at IS NOT NULL THEN 1 ELSE 0 END) as clicked,
+      SUM(CASE WHEN delivery_status = 'failed' OR status = 'failed' THEN 1 ELSE 0 END) as failed,
+      SUM(CASE WHEN delivery_status = 'bounced' THEN 1 ELSE 0 END) as bounced,
+      SUM(CASE WHEN delivery_status = 'complained' THEN 1 ELSE 0 END) as complained,
+      SUM(CASE WHEN delivery_status = 'delayed' THEN 1 ELSE 0 END) as delayed,
+      SUM(CASE WHEN delivery_status = 'suppressed' THEN 1 ELSE 0 END) as suppressed
       FROM send_logs`
     )
     .get() as any;
@@ -222,6 +224,8 @@ router.get("/stats", (_req: Request, res: Response) => {
       failed: engagement.failed || 0,
       bounced: engagement.bounced || 0,
       complained: engagement.complained || 0,
+      delayed: engagement.delayed || 0,
+      suppressed: engagement.suppressed || 0,
       openRate: engagement.delivered
         ? ((engagement.opened / engagement.delivered) * 100).toFixed(1)
         : "0.0",
@@ -577,7 +581,7 @@ router.post("/subscribers/bulk-status", (req: Request, res: Response) => {
     return;
   }
 
-  const validStatuses = ["active", "unsubscribed", "bounced", "complained"];
+  const validStatuses = ["active", "unsubscribed", "bounced", "complained", "suppressed"];
 
   if (!validStatuses.includes(status)) {
     res.status(400).json({

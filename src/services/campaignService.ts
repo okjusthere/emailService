@@ -30,6 +30,8 @@ export interface CampaignStats {
   failed: number;
   bounced: number;
   complained: number;
+  delayed: number;
+  suppressed: number;
 }
 
 
@@ -172,7 +174,9 @@ export function getCampaignStats(id: string): CampaignStats {
       SUM(CASE WHEN clicked_at IS NOT NULL THEN 1 ELSE 0 END) as clicked,
       SUM(CASE WHEN delivery_status = 'failed' OR status = 'failed' THEN 1 ELSE 0 END) as failed,
       SUM(CASE WHEN delivery_status = 'bounced' THEN 1 ELSE 0 END) as bounced,
-      SUM(CASE WHEN delivery_status = 'complained' THEN 1 ELSE 0 END) as complained
+      SUM(CASE WHEN delivery_status = 'complained' THEN 1 ELSE 0 END) as complained,
+      SUM(CASE WHEN delivery_status = 'delayed' THEN 1 ELSE 0 END) as delayed,
+      SUM(CASE WHEN delivery_status = 'suppressed' THEN 1 ELSE 0 END) as suppressed
     FROM send_logs WHERE campaign_id = ?`
   ).get(id) as any;
 
@@ -184,5 +188,7 @@ export function getCampaignStats(id: string): CampaignStats {
     failed: row.failed || 0,
     bounced: row.bounced || 0,
     complained: row.complained || 0,
+    delayed: row.delayed || 0,
+    suppressed: row.suppressed || 0,
   };
 }

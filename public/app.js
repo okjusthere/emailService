@@ -123,6 +123,7 @@ async function loadDashboard() {
     document.getElementById("stat-unsubscribed").textContent = (s.unsubscribed || 0).toLocaleString();
     document.getElementById("stat-bounced").textContent = (s.bounced || 0).toLocaleString();
     document.getElementById("stat-complained").textContent = (s.complained || 0).toLocaleString();
+    document.getElementById("stat-suppressed").textContent = (s.suppressed || 0).toLocaleString();
     document.getElementById("stat-today").textContent = (data.todaySentCount || 0).toLocaleString();
 
     // Engagement stats
@@ -132,6 +133,8 @@ async function loadDashboard() {
     document.getElementById("eng-open-rate").textContent = `${e.openRate}%`;
     document.getElementById("eng-click-rate").textContent = `${e.clickRate}%`;
     document.getElementById("eng-bounce-rate").textContent = `${e.bounceRate}%`;
+    document.getElementById("eng-delayed").textContent = (e.delayed || 0).toLocaleString();
+    document.getElementById("eng-suppressed").textContent = (e.suppressed || 0).toLocaleString();
 
     // Warmup banner
     const wb = document.getElementById("warmup-banner");
@@ -608,6 +611,9 @@ const webhookEventColors = {
   "email.clicked": "purple",
   "email.bounced": "red",
   "email.complained": "orange",
+  "email.delivery_delayed": "orange",
+  "email.suppressed": "red",
+  "email.failed": "red",
 };
 
 const webhookEventEmojis = {
@@ -616,6 +622,9 @@ const webhookEventEmojis = {
   "email.clicked": "🔗",
   "email.bounced": "🚫",
   "email.complained": "⚠️",
+  "email.delivery_delayed": "⏳",
+  "email.suppressed": "🛑",
+  "email.failed": "❌",
 };
 
 function webhookEventBadge(eventType) {
@@ -1100,6 +1109,7 @@ async function loadCampaignList() {
 	            <span>❌ ${s.failed || 0} failed</span>
 	            <span>📬 ${openRate}% opened</span>
 	            <span>🔴 ${s.bounced || 0} bounced</span>
+	            <span>🛑 ${s.suppressed || 0} suppressed</span>
 	          </div>
           <div class="campaign-card-actions">
             <button class="btn-secondary btn-sm" onclick="event.stopPropagation(); duplicateCampaign('${c.id}')">📋 Duplicate</button>
@@ -1153,6 +1163,8 @@ async function openCampaignEditor(id) {
 	          <div class="cs-item"><span class="cs-value" style="color:var(--green)">${openRate}%</span><span class="cs-label">Opened</span></div>
 	          <div class="cs-item"><span class="cs-value" style="color:var(--blue)">${clickRate}%</span><span class="cs-label">Clicked</span></div>
 	          <div class="cs-item"><span class="cs-value" style="color:var(--red)">${bounceRate}%</span><span class="cs-label">Bounced</span></div>
+	          <div class="cs-item"><span class="cs-value" style="color:var(--orange)">${s.delayed || 0}</span><span class="cs-label">Delayed</span></div>
+	          <div class="cs-item"><span class="cs-value" style="color:var(--red)">${s.suppressed || 0}</span><span class="cs-label">Suppressed</span></div>
 	        `;
         statsBar.classList.remove("hidden");
       } else {
