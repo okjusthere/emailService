@@ -17,7 +17,9 @@ export async function inTransaction<T>(
       });
     } catch (error) {
       const isWriteConflict =
-        error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034";
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        (error.code === "P2034" ||
+          (error.code === "P2010" && String(error.meta?.code ?? "") === "40001"));
       if (!isWriteConflict || attempt === maxAttempts) throw error;
       await new Promise((resolve) => setTimeout(resolve, attempt * 10));
     }

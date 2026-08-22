@@ -35,8 +35,8 @@ import {
 } from "../../modules/contacts/service.js";
 import { createListing, listListings, updateListing } from "../../modules/listings/service.js";
 import {
-  confirmedImportMapping,
   previewContactImport,
+  queueContactImport,
   validateContactImport,
 } from "../../modules/imports/service.js";
 import { upsertSuppression } from "../../modules/suppressions/domain.js";
@@ -488,45 +488,10 @@ router.post("/contact-imports/:id/validate", requireRole("ADMIN", "MARKETER"), a
 });
 router.post("/contact-imports/:id/apply", requireRole("ADMIN", "MARKETER"), async (req, res) => {
   const { id } = idParam.parse(req.params);
-  const item = await prisma.contactImport.findUniqueOrThrow({ where: { id } });
-  if (item.status !== "READY" && item.status !== "FAILED")
-    throw new DomainError("IMPORT_INVALID_STATE", "Import must be validated before apply.", 409);
   const input = z
     .object({ confirmCreateUnknownReferences: z.boolean().default(false) })
     .parse(req.body ?? {});
-  let mapping: ReturnType<typeof confirmedImportMapping>;
-  try {
-    mapping = confirmedImportMapping(item.mapping, input.confirmCreateUnknownReferences);
-  } catch (error) {
-    throw new DomainError(
-      "IMPORT_MAPPING_CONFIRMATION_REQUIRED",
-      error instanceof Error ? error.message : "Confirm the saved import mapping before apply.",
-      409
-    );
-  }
-  await prisma.$transaction([
-    prisma.contactImport.update({
-      where: { id },
-      data: { status: "PROCESSING", mapping },
-    }),
-    prisma.job.upsert({
-      where: { uniqueKey: `IMPORT_CONTACTS/${id}` },
-      create: {
-        type: "IMPORT_CONTACTS",
-        uniqueKey: `IMPORT_CONTACTS/${id}`,
-        payload: { importId: id },
-      },
-      update: {
-        status: "PENDING",
-        runAt: new Date(),
-        attempts: 0,
-        lockedAt: null,
-        lockedBy: null,
-        lockExpiresAt: null,
-      },
-    }),
-  ]);
-  res.status(202).json({ id, status: "PROCESSING" });
+  res.status(202).json(await queueContactImport(id, input.confirmCreateUnknownReferences));
 });
 router.get("/contact-imports/:id", requireRole("ADMIN", "MARKETER"), async (req, res) => {
   const { id } = idParam.parse(req.params);

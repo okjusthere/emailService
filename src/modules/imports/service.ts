@@ -1,10 +1,11 @@
-import { ContactSourceType, ContactType, PermissionBasis, type Prisma } from "@prisma/client";
+import { ContactSourceType, ContactType, PermissionBasis, Prisma } from "@prisma/client";
 import { parse } from "csv-parse";
 import type { Readable } from "node:stream";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "../../db/prisma.js";
 import { inTransaction } from "../../db/transactions.js";
+import { DomainError } from "../../shared/errors.js";
 import {
   escapeCsvCell,
   normalizeEmail,
@@ -249,6 +250,72 @@ export function confirmedImportMapping(
       "Confirm creation of unknown tags, markets, and property interests before apply"
     );
   return { ...mapping, createUnknownReferences: confirmCreateUnknownReferences };
+}
+
+export async function queueContactImport(
+  importId: string,
+  confirmCreateUnknownReferences: boolean
+) {
+  return inTransaction(async (tx) => {
+    await tx.$queryRaw(Prisma.sql`
+      SELECT id FROM contact_imports WHERE id = ${importId}::uuid FOR UPDATE
+    `);
+    const item = await tx.contactImport.findUnique({ where: { id: importId } });
+    if (!item) throw new DomainError("IMPORT_NOT_FOUND", "Import not found.", 404);
+
+    if (item.status === "PROCESSING") {
+      const existingJob = await tx.job.findUnique({
+        where: { uniqueKey: `IMPORT_CONTACTS/${importId}` },
+      });
+      if (!existingJob)
+        throw new DomainError(
+          "IMPORT_JOB_MISSING",
+          "Import is processing but its durable job is missing.",
+          409
+        );
+      return { id: importId, status: item.status, alreadyProcessing: true };
+    }
+    if (item.status !== "READY" && item.status !== "FAILED")
+      throw new DomainError("IMPORT_INVALID_STATE", "Import must be validated before apply.", 409);
+
+    let mapping: ReturnType<typeof confirmedImportMapping>;
+    try {
+      mapping = confirmedImportMapping(item.mapping, confirmCreateUnknownReferences);
+    } catch (error) {
+      throw new DomainError(
+        "IMPORT_MAPPING_CONFIRMATION_REQUIRED",
+        error instanceof Error ? error.message : "Confirm the saved import mapping before apply.",
+        409
+      );
+    }
+
+    const claimed = await tx.contactImport.updateMany({
+      where: { id: importId, status: { in: ["READY", "FAILED"] } },
+      data: { status: "PROCESSING", mapping },
+    });
+    if (claimed.count !== 1)
+      throw new DomainError("IMPORT_STATE_CHANGED", "Import state changed while applying.", 409);
+
+    await tx.job.upsert({
+      where: { uniqueKey: `IMPORT_CONTACTS/${importId}` },
+      create: {
+        type: "IMPORT_CONTACTS",
+        uniqueKey: `IMPORT_CONTACTS/${importId}`,
+        payload: { importId },
+      },
+      update: {
+        status: "PENDING",
+        runAt: new Date(),
+        attempts: 0,
+        lockedAt: null,
+        lockedBy: null,
+        lockExpiresAt: null,
+        lastError: null,
+        completedAt: null,
+      },
+    });
+    return { id: importId, status: "PROCESSING" as const, alreadyProcessing: false };
+  });
 }
 
 interface ReferenceCache {

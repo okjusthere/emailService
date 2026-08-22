@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { config } from "../../src/config/index.js";
 import { prisma } from "../../src/db/prisma.js";
 import { claimDueJob, reserveCampaignRecipients } from "../../src/db/rawQueries.js";
+import { inTransaction } from "../../src/db/transactions.js";
 import { FakeEmailProvider } from "../../src/email/providers/FakeEmailProvider.js";
 import type {
   ProviderBatchResult,
@@ -29,9 +30,12 @@ import { resolveAzureUser } from "../../src/modules/auth/service.js";
 import {
   confirmedImportMapping,
   processContactImport,
+  queueContactImport,
   validateContactImport,
 } from "../../src/modules/imports/service.js";
+import { upsertSuppression } from "../../src/modules/suppressions/domain.js";
 import { getPrivateObjectStorage } from "../../src/storage/PrivateObjectStorage.js";
+import { completeClaimedJob, failClaimedJob } from "../../src/worker/jobRunner.js";
 
 const frozenContent: ListingEmailSnapshot = {
   listing: {
@@ -372,6 +376,56 @@ describe("PostgreSQL delivery invariants", () => {
     expect(await prisma.contact.count({ where: { emailNormalized: email } })).toBe(1);
   });
 
+  it("queues an import once without resetting an active worker lease", async () => {
+    const importId = (
+      await prisma.contactImport.create({
+        data: {
+          fileName: "concurrent.csv",
+          sourceMetadata: { sourceType: "MANUAL", permissionBasis: "BUSINESS_CONTACT" },
+          mapping: {
+            columns: { email: "email" },
+            unknownReferences: { tags: [], markets: [], propertyInterests: [] },
+            createUnknownReferences: false,
+          },
+          status: "READY",
+          createdByUserId: actorId,
+        },
+      })
+    ).id;
+
+    const queued = await Promise.all([
+      queueContactImport(importId, false),
+      queueContactImport(importId, false),
+    ]);
+    expect(queued.map((result) => result.status)).toEqual(["PROCESSING", "PROCESSING"]);
+    expect(queued.filter((result) => result.alreadyProcessing)).toHaveLength(1);
+    expect(await prisma.job.count({ where: { uniqueKey: `IMPORT_CONTACTS/${importId}` } })).toBe(1);
+
+    const leaseExpiry = new Date(Date.now() + 60_000);
+    await prisma.job.update({
+      where: { uniqueKey: `IMPORT_CONTACTS/${importId}` },
+      data: {
+        status: "RUNNING",
+        attempts: 3,
+        lockedBy: "active-import-worker",
+        lockedAt: new Date(),
+        lockExpiresAt: leaseExpiry,
+      },
+    });
+    await expect(queueContactImport(importId, false)).resolves.toMatchObject({
+      status: "PROCESSING",
+      alreadyProcessing: true,
+    });
+    expect(
+      await prisma.job.findUniqueOrThrow({ where: { uniqueKey: `IMPORT_CONTACTS/${importId}` } })
+    ).toMatchObject({
+      status: "RUNNING",
+      attempts: 3,
+      lockedBy: "active-import-worker",
+      lockExpiresAt: leaseExpiry,
+    });
+  });
+
   it("requires explicit column mapping and unknown-reference confirmation", async () => {
     const marker = randomUUID();
     const email = `mapped-${marker}@example.com`;
@@ -697,6 +751,26 @@ describe("PostgreSQL delivery invariants", () => {
     ).toBe(1);
   });
 
+  it("never revives a campaign when cancel races with pause or resume", async () => {
+    for (const action of ["pause", "resume"] as const) {
+      const initialStatus = action === "pause" ? "SENDING" : "PAUSED";
+      const fixture = await createFixture(1, "SENDING");
+      if (initialStatus === "PAUSED")
+        await prisma.campaign.update({
+          where: { id: fixture.campaign.id },
+          data: { status: initialStatus },
+        });
+
+      await Promise.allSettled([
+        transitionCampaign(fixture.campaign.id, action, testActor()),
+        transitionCampaign(fixture.campaign.id, "cancel", testActor()),
+      ]);
+      expect(
+        await prisma.campaign.findUniqueOrThrow({ where: { id: fixture.campaign.id } })
+      ).toMatchObject({ status: "CANCELLED" });
+    }
+  });
+
   it("returns stable not-found errors across campaign commands", async () => {
     const id = randomUUID();
     await expect(previewCampaign(id)).rejects.toMatchObject({ code: "CAMPAIGN_NOT_FOUND" });
@@ -730,6 +804,51 @@ describe("PostgreSQL delivery invariants", () => {
       data: { status: "RUNNING", lockExpiresAt: new Date(Date.now() - 1_000) },
     });
     expect((await claimDueJob("worker-after-crash", 120))?.id).toBe(job.id);
+  });
+
+  it("prevents a stale worker from completing or failing a reclaimed job", async () => {
+    const job = await prisma.job.create({
+      data: {
+        type: "CLEANUP_EXPIRED_DATA",
+        uniqueKey: `lease-owner/${randomUUID()}`,
+        payload: {},
+        status: "RUNNING",
+        attempts: 2,
+        lockedAt: new Date(),
+        lockedBy: "current-worker",
+        lockExpiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+
+    await expect(completeClaimedJob(job.id, "stale-worker")).resolves.toBe(false);
+    await expect(failClaimedJob(job, "stale-worker", "stale failure")).resolves.toBe(false);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+      status: "RUNNING",
+      lockedBy: "current-worker",
+      lastError: null,
+    });
+    await expect(completeClaimedJob(job.id, "current-worker")).resolves.toBe(true);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+      status: "COMPLETED",
+      lockedBy: null,
+    });
+  });
+
+  it("keeps the strictest suppression under concurrent webhook-style writes", async () => {
+    const email = `suppression-race-${randomUUID()}@example.com`;
+    await Promise.all([
+      inTransaction((tx) =>
+        upsertSuppression(tx, { email, reason: "COMPLAINT", source: "RESEND" })
+      ),
+      inTransaction((tx) => upsertSuppression(tx, { email, reason: "MANUAL", source: "ADMIN" })),
+    ]);
+    expect(
+      await prisma.suppression.findUniqueOrThrow({ where: { emailNormalized: email } })
+    ).toMatchObject({
+      reason: "COMPLAINT",
+      source: "RESEND",
+      isActive: true,
+    });
   });
 
   it("keeps a durable wake-up without provider calls while delivery is disabled", async () => {

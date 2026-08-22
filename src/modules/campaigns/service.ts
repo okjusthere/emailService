@@ -1,4 +1,4 @@
-import { CampaignStatus, type Prisma } from "@prisma/client";
+import { CampaignStatus, Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { config } from "../../config/index.js";
@@ -661,6 +661,9 @@ export async function transitionCampaign(
         ? CampaignStatus.SENDING
         : CampaignStatus.CANCELLED;
   return inTransaction(async (tx) => {
+    await tx.$queryRaw(Prisma.sql`
+      SELECT id FROM campaigns WHERE id = ${id}::uuid FOR UPDATE
+    `);
     const campaign = await tx.campaign.findUnique({ where: { id } });
     if (!campaign) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
     assertCampaignTransition(campaign.status, target);

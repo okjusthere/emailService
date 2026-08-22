@@ -167,8 +167,9 @@ describe("HTTP security and API contract", () => {
 
   it("paginates by cursor and rejects an SVG upload regardless of its filename", async () => {
     const unique = Date.now().toString(36);
+    const contactIds: string[] = [];
     for (const suffix of ["a", "b"]) {
-      await agent
+      const created = await agent
         .post("/api/v2/contacts")
         .set(mutationHeaders)
         .send({
@@ -178,15 +179,25 @@ describe("HTTP security and API contract", () => {
           contactType: "OTHER",
         })
         .expect(201);
+      contactIds.push(created.body.id);
     }
-    const first = await agent.get(`/api/v2/contacts?limit=1&search=cursor-${unique}`).expect(200);
+    await prisma.contact.update({
+      where: { id: contactIds[0] },
+      data: { lastEngagedAt: new Date("2026-08-21T12:00:00.000Z") },
+    });
+    const first = await agent
+      .get(`/api/v2/contacts?limit=1&search=cursor-${unique}&sort=lastEngagedAt&order=desc`)
+      .expect(200);
     expect(first.body.items).toHaveLength(1);
+    expect(first.body.items[0].id).toBe(contactIds[0]);
     expect(first.body.nextCursor).toMatch(/[0-9a-f-]{36}/);
     const second = await agent
-      .get(`/api/v2/contacts?limit=1&search=cursor-${unique}&cursor=${first.body.nextCursor}`)
+      .get(
+        `/api/v2/contacts?limit=1&search=cursor-${unique}&sort=lastEngagedAt&order=desc&cursor=${first.body.nextCursor}`
+      )
       .expect(200);
     expect(second.body.items).toHaveLength(1);
-    expect(second.body.items[0].id).not.toBe(first.body.items[0].id);
+    expect(second.body.items[0].id).toBe(contactIds[1]);
 
     const broker = await agent
       .post("/api/v2/agents")

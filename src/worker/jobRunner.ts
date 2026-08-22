@@ -1,3 +1,4 @@
+import type { Job } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { config } from "../config/index.js";
 import { claimDueJob } from "../db/rawQueries.js";
@@ -5,6 +6,42 @@ import { prisma } from "../db/prisma.js";
 import { sanitizeErrorMessage } from "../shared/normalize.js";
 import { logger } from "../shared/logger.js";
 import { handleJob } from "./handlers/index.js";
+
+export async function completeClaimedJob(jobId: string, workerId: string): Promise<boolean> {
+  const completed = await prisma.job.updateMany({
+    where: { id: jobId, status: "RUNNING", lockedBy: workerId },
+    data: {
+      status: "COMPLETED",
+      completedAt: new Date(),
+      lockedAt: null,
+      lockedBy: null,
+      lockExpiresAt: null,
+    },
+  });
+  return completed.count === 1;
+}
+
+export async function failClaimedJob(
+  job: Job,
+  workerId: string,
+  message: string
+): Promise<boolean> {
+  const terminal = job.attempts >= job.maxAttempts;
+  const failed = await prisma.job.updateMany({
+    where: { id: job.id, status: "RUNNING", lockedBy: workerId },
+    data: {
+      status: terminal ? "FAILED" : "PENDING",
+      runAt: terminal
+        ? job.runAt
+        : new Date(Date.now() + Math.min(3_600_000, 30_000 * 2 ** Math.max(0, job.attempts - 1))),
+      lastError: message,
+      lockedAt: null,
+      lockedBy: null,
+      lockExpiresAt: null,
+    },
+  });
+  return failed.count === 1;
+}
 
 export class JobRunner {
   private stopping = false;
@@ -54,35 +91,19 @@ export class JobRunner {
       renewal.unref();
       try {
         await handleJob(job.type, job.payload);
-        await prisma.job.update({
-          where: { id: job.id },
-          data: {
-            status: "COMPLETED",
-            completedAt: new Date(),
-            lockedAt: null,
-            lockedBy: null,
-            lockExpiresAt: null,
-          },
-        });
+        const completed = await completeClaimedJob(job.id, this.workerId);
+        if (!completed)
+          logger.warn(
+            { jobId: job.id, workerId: this.workerId },
+            "Job completed after its lease was lost; state was left unchanged"
+          );
       } catch (error) {
         const message = sanitizeErrorMessage(error);
-        const terminal = job.attempts >= job.maxAttempts;
-        await prisma.job.update({
-          where: { id: job.id },
-          data: {
-            status: terminal ? "FAILED" : "PENDING",
-            runAt: terminal
-              ? job.runAt
-              : new Date(
-                  Date.now() + Math.min(3_600_000, 30_000 * 2 ** Math.max(0, job.attempts - 1))
-                ),
-            lastError: message,
-            lockedAt: null,
-            lockedBy: null,
-            lockExpiresAt: null,
-          },
-        });
-        logger.error({ jobId: job.id, jobType: job.type, err: message }, "Job failed");
+        const failed = await failClaimedJob(job, this.workerId, message);
+        logger.error(
+          { jobId: job.id, jobType: job.type, err: message, leaseOwned: failed },
+          failed ? "Job failed" : "Job failed after its lease was lost; state was left unchanged"
+        );
       } finally {
         clearInterval(renewal);
       }
