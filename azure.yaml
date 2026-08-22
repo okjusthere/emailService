@@ -1,0 +1,17 @@
+name: homix-marketing
+metadata:
+  template: homix-marketing-v2@2.0.0
+infra:
+  provider: bicep
+  path: infra
+services:
+  web:
+    project: .
+    host: containerapp
+    language: js
+  worker:
+    project: .
+    host: containerapp
+    language: js
+# Canonical orchestration is scripts/provision-azure.sh and the deployment
+# workflows because azd does not sequence the shared-image migration job.

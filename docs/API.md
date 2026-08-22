@@ -1,0 +1,67 @@
+# API guide
+
+The complete contract is `openapi.yaml` (OpenAPI 3.1). Authenticated routes are mounted at `/api/v2`; public routes are under `/api/public`. JSON errors use a stable domain code/message and include the request ID.
+
+## Authentication and CSRF
+
+Production uses Azure Container Apps Easy Auth. The server decodes the platform-verified `X-MS-CLIENT-PRINCIPAL`, maps the Entra identity to `users`, and obtains roles only from PostgreSQL. Local development uses `POST /api/v2/auth/dev-login` and a signed HttpOnly cookie; the route is unavailable in production.
+
+All `/api/v2/*` requests require a user. Mutations using cookie auth require the same-origin CSRF header supplied by the SPA. ADMIN controls users, verification, suppression release and global sending; MARKETER manages marketing entities; VIEWER is read-only. Marketers only see their own audit rows.
+
+## Main resources
+
+| Area        | Representative operations                                                         |
+| ----------- | --------------------------------------------------------------------------------- |
+| Auth/users  | `GET /auth/me`, user list/create/role update                                      |
+| Agents      | list/create/get/update/deactivate                                                 |
+| Contacts    | cursor list, CRUD/archive/restore, bulk update, formula-safe CSV export           |
+| Imports     | multipart upload, validate, apply, status, error CSV                              |
+| Reference   | tags, market hierarchy, property interests                                        |
+| Suppression | list/manual add/Admin release                                                     |
+| Listings    | cursor list, CRUD/duplicate/archive, multipart assets/reorder/delete              |
+| Audiences   | estimate, saved CRUD/duplicate                                                    |
+| Senders     | CRUD, verification/suspension, quota                                              |
+| Campaigns   | list/detail/update/duplicate/preview/test/ready/schedule/send/pause/resume/cancel |
+| Reporting   | campaign stats/recipients/events/export, dashboard, audit                         |
+| Operations  | readiness, global pause/resume with reason/recovery confirmation                  |
+
+Contacts, listings and campaigns support `limit` plus opaque UUID `cursor` pagination; responses include `nextCursor`. Existing page parameters remain accepted on report/reference endpoints where offset navigation is sufficient. Contact filters cover type/source/permission/status/tag/market/property-interest/suppression and safe sort fields; listing filters cover status/property/transaction/agent; campaign recipients and their CSV export accept send/delivery state filters. Filters are enumerated and validated by Zod.
+
+CSV import is an explicit four-step flow: upload and inspect headers/masked preview, submit a canonical-field-to-header mapping, review invalid/duplicate/suppressed counts and unknown references, then apply. Unknown tags, markets or property interests are not created unless the apply request explicitly sets `confirmCreateUnknownReferences`.
+
+Campaign mutations that can be retried use explicit idempotency or optimistic concurrency: draft updates check version; send-now accepts a client idempotency key and reuses the durable dispatch job/snapshot instead of duplicating recipients.
+
+## Public endpoints
+
+```text
+GET  /health/live
+GET  /health/ready
+POST /api/public/webhooks/resend
+GET  /unsubscribe?token=...
+POST /api/public/unsubscribe/confirm
+POST /api/public/unsubscribe/one-click?token=...
+GET  /public/assets/*      local storage adapter only
+```
+
+Webhook requires valid Svix/Resend signature headers against the exact raw request bytes. Its `svix-id` is unique and replay-safe. Visible unsubscribe GET only renders confirmation; mutation occurs on POST. RFC 8058 one-click returns `204` and is idempotent. Invalid/expired/tampered tokens do not reveal recipient identity. Public routes are rate limited and never redirect to caller-provided URLs.
+
+## Example local session
+
+```bash
+curl -i -c /tmp/homix-cookie.txt \
+  -H 'content-type: application/json' \
+  -d '{"email":"admin@homixny.com"}' \
+  http://localhost:3000/api/v2/auth/dev-login
+
+curl -b /tmp/homix-cookie.txt http://localhost:3000/api/v2/auth/me
+```
+
+Use the browser SPA for mutations so it supplies the request/CSRF headers correctly. Never enable local auth in production.
+
+## Health semantics
+
+`/health/live` means the Web process event loop is serving. `/health/ready` validates application role/config, database reachability and applied Prisma migration; it returns non-2xx while unavailable. Admin `/api/v2/system/readiness` additionally reports sender/address/delivery mode, pause/recovery guard and Worker heartbeat.
+
+All deployment roles use the same image. `APP_ROLE=web` serves HTTP, `APP_ROLE=worker` runs durable jobs, and `APP_ROLE=migrate` applies Prisma migrations followed by the idempotent seed before exiting.
+
+Regenerate no code from the OpenAPI file automatically; route implementation and schema are reviewed together. CI runs `npm run openapi:lint`.

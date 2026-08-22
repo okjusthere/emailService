@@ -2,29 +2,59 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  test:
+  verify:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 35
+    env:
+      NODE_ENV: test
+      BASE_URL: http://localhost:3000
+      DATABASE_URL: postgresql://homix:homix@localhost:5434/homix_marketing?schema=public
+      DIRECT_DATABASE_URL: postgresql://homix:homix@localhost:5434/homix_marketing?schema=public
+      AUTH_MODE: local
+      LOCAL_ADMIN_EMAIL: admin@homixny.com
+      SESSION_SECRET: ci-session-secret-at-least-sixteen-bytes
+      EMAIL_PROVIDER: fake
+      EMAIL_DELIVERY_MODE: disabled
+      EMAIL_TEST_ALLOWLIST: admin@homixny.com
+      STORAGE_PROVIDER: local
+      LOCAL_ASSET_DIR: ./data/test-assets
+      PUBLIC_ASSET_BASE_URL: http://localhost:3000/public/assets
+      COMPANY_POSTAL_ADDRESS: 123 Main Street, Huntington, NY 11743
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run checks
-        run: npm run check
-
-      - name: Run tests
-        run: npm test
+      - run: npm ci
+      - run: npm run prisma:generate
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:unit
+      - run: npm run test:coverage
+      - run: docker compose up -d --wait postgres
+      - run: npm run prisma:migrate:deploy
+      - run: npm run db:seed
+      - run: npm run test:api
+      - run: npm run test:integration
+      - run: npm run build
+      - run: docker build -t homix-marketing:${{ github.sha }} .
+      - run: az bicep build --file infra/bootstrap.bicep --stdout > /dev/null
+      - run: az bicep build --file infra/main.bicep --stdout > /dev/null
+      - run: npm run openapi:lint
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report
+          if-no-files-found: ignore

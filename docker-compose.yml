@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_USER: homix
+      POSTGRES_PASSWORD: homix
+      POSTGRES_DB: homix_marketing
+    ports:
+      - "${POSTGRES_PORT:-5434}:5432"
+    volumes:
+      - homix-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U homix -d homix_marketing"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  web:
+    build: .
+    environment: &app-env
+      NODE_ENV: development
+      APP_ROLE: web
+      PORT: 3000
+      BASE_URL: http://localhost:3000
+      DATABASE_URL: postgresql://homix:homix@postgres:5432/homix_marketing?schema=public
+      DIRECT_DATABASE_URL: postgresql://homix:homix@postgres:5432/homix_marketing?schema=public
+      AUTH_MODE: local
+      LOCAL_ADMIN_EMAIL: admin@homixny.com
+      SESSION_SECRET: local-compose-session-secret-change-me
+      EMAIL_DELIVERY_MODE: disabled
+      STORAGE_PROVIDER: local
+      LOCAL_ASSET_DIR: /app/data/assets
+      PUBLIC_ASSET_BASE_URL: http://localhost:3000/public/assets
+      COMPANY_NAME: Homix Realty
+      COMPANY_POSTAL_ADDRESS: REQUIRED_BEFORE_LIVE_SEND
+    ports:
+      - "3000:3000"
+    volumes:
+      - homix-assets:/app/data/assets
+    depends_on:
+      postgres:
+        condition: service_healthy
+  worker:
+    build: .
+    profiles: ["worker"]
+    environment:
+      <<: *app-env
+      APP_ROLE: worker
+    volumes:
+      - homix-assets:/app/data/assets
+    depends_on:
+      postgres:
+        condition: service_healthy
+volumes:
+  homix-postgres:
+  homix-assets:

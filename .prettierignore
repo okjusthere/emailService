@@ -1,0 +1,6 @@
+node_modules
+dist
+coverage
+src/generated
+package-lock.json
+HOMIX_MARKETING_LISTING_V2_CODEX_SPEC.md

@@ -1,8 +1,17 @@
 node_modules/
 dist/
+coverage/
+playwright-report/
+test-results/
 data/
 backups/
 .env
+.env.*
+!.env.example
+infra/*.local.bicepparam
 *.db
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite3
+.DS_Store

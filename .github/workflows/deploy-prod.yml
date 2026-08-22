@@ -1,0 +1,74 @@
+name: Deploy production
+
+on:
+  workflow_dispatch:
+    inputs:
+      imageTag:
+        description: Immutable ACR tag; defaults to current commit SHA
+        required: false
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: homix-marketing-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment: production
+    runs-on: ubuntu-latest
+    env:
+      AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      ENTRA_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ENTRA_CLIENT_ID: ${{ vars.ENTRA_CLIENT_ID }}
+      HOMIX_BASE_URL: https://marketing.homixny.com
+      BOOTSTRAP_ADMIN_EMAILS: ${{ vars.BOOTSTRAP_ADMIN_EMAILS }}
+      COMPANY_POSTAL_ADDRESS: ${{ vars.COMPANY_POSTAL_ADDRESS }}
+      ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+      USE_RESEND_SECRETS: "true"
+      USE_PREVIOUS_RESEND_WEBHOOK_SECRET: ${{ vars.USE_PREVIOUS_RESEND_WEBHOOK_SECRET }}
+      RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT: ${{ vars.RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT }}
+      USE_ENTRA_CLIENT_SECRET: "true"
+      EMAIL_DELIVERY_MODE: ${{ vars.EMAIL_DELIVERY_MODE }}
+      DEPLOYMENT_TIER: ${{ vars.DEPLOYMENT_TIER || 'starter' }}
+      ENABLE_ZONE_REDUNDANT_HA: ${{ vars.ENABLE_ZONE_REDUNDANT_HA || 'false' }}
+      POSTGRES_BACKUP_RETENTION_DAYS: ${{ vars.POSTGRES_BACKUP_RETENTION_DAYS || '7' }}
+      ENABLE_GEO_REDUNDANT_BACKUP: ${{ vars.ENABLE_GEO_REDUNDANT_BACKUP || 'false' }}
+      STORAGE_SKU_NAME: ${{ vars.STORAGE_SKU_NAME || 'Standard_LRS' }}
+      IMAGE_TAG_INPUT: ${{ inputs.imageTag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - id: image
+        shell: bash
+        run: |
+          tag="$IMAGE_TAG_INPUT"
+          tag="${tag:-${GITHUB_SHA}}"
+          if [[ ! "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Invalid image tag" >&2
+            exit 1
+          fi
+          login_server="$(az acr show -n "$AZURE_ACR_NAME" --query loginServer -o tsv)"
+          az acr build -r "$AZURE_ACR_NAME" -t "homix-marketing:${tag}" -t "homix-marketing:2.0.0-${GITHUB_RUN_NUMBER}" .
+          echo "uri=${login_server}/homix-marketing:${tag}" >> "${GITHUB_OUTPUT}"
+      - name: Bicep what-if
+        env:
+          IMAGE_URI: ${{ steps.image.outputs.uri }}
+        run: az deployment group what-if -g "$AZURE_RESOURCE_GROUP" -f infra/main.bicep -p environment=prod acrName="$AZURE_ACR_NAME" entraTenantId="$ENTRA_TENANT_ID" entraClientId="$ENTRA_CLIENT_ID" baseUrl="$HOMIX_BASE_URL" bootstrapAdminEmails="$BOOTSTRAP_ADMIN_EMAILS" companyPostalAddress="$COMPANY_POSTAL_ADDRESS" alertEmail="$ALERT_EMAIL" useResendSecrets=true usePreviousResendWebhookSecret="${USE_PREVIOUS_RESEND_WEBHOOK_SECRET:-false}" resendWebhookPreviousSecretExpiresAt="${RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT:-}" useEntraClientSecret=true emailDeliveryMode="$EMAIL_DELIVERY_MODE" containerImage="$IMAGE_URI" migrationContainerImage="$IMAGE_URI" --no-pretty-print > bicep-what-if.txt
+      - uses: actions/upload-artifact@v4
+        with: { name: bicep-production-what-if, path: bicep-what-if.txt }
+      - run: chmod +x scripts/deploy-release.sh
+      - env:
+          IMAGE_URI: ${{ steps.image.outputs.uri }}
+        run: scripts/deploy-release.sh "$AZURE_RESOURCE_GROUP" prod "$IMAGE_URI"
+      - uses: actions/upload-artifact@v4
+        with: { name: deployment-production-summary, path: deployment-summary.md }
