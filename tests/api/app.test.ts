@@ -130,10 +130,15 @@ describe("HTTP security and API contract", () => {
       .set(mutationHeaders)
       .send({ name: tagName, color: "#123456" })
       .expect(201);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    expect(
-      await prisma.auditLog.count({ where: { action: "http.mutation", entityType: "api_request" } })
-    ).toBeGreaterThan(0);
+    await expect
+      .poll(
+        () =>
+          prisma.auditLog.count({
+            where: { action: "http.mutation", entityType: "api_request" },
+          }),
+        { timeout: 1_000 }
+      )
+      .toBeGreaterThan(0);
 
     await agent
       .post("/api/v2/contacts")
