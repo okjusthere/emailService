@@ -25,7 +25,10 @@ RUN npm ci --omit=dev \
 
 FROM base AS runtime
 ENV NODE_ENV=production APP_ROLE=web PORT=3000
-RUN groupadd --system --gid 10001 homix && useradd --system --uid 10001 --gid homix --home-dir /app homix
+RUN groupadd --system --gid 10001 homix \
+  && useradd --system --uid 10001 --gid homix --home-dir /app homix \
+  && rm -rf /usr/local/lib/node_modules/npm \
+  && rm -f /usr/local/bin/npm /usr/local/bin/npx
 COPY --from=production-dependencies --chown=homix:homix /app/node_modules ./node_modules
 COPY --from=build --chown=homix:homix /app/dist ./dist
 COPY --from=build --chown=homix:homix /app/prisma ./prisma
