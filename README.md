@@ -1,182 +1,99 @@
-# Resend Email Service
+# Homix Marketing Listing V2
 
-A lightweight, self-hosted email operations layer built on top of [Resend](https://resend.com).
+Homix Realty 的房源营销邮件工作台。系统将联系人、房源、受众、Campaign、Resend 投递与合规事件放在一个可审计流程中；生产数据库为 PostgreSQL，Web、Worker 和 Migration 使用同一不可变 Docker 镜像、三个独立运行角色。
 
-This project is intentionally not a full SMTP platform. It focuses on the operational layer most small teams need:
+## 能力
 
-- campaign composition and previews
-- subscriber management and tagging
-- drip-style campaign delivery with a DB-backed job queue
-- Resend webhook ingestion for engagement and suppression handling
-- public subscribe forms with double opt-in support
-- a single-container deployment model using SQLite
+- React 管理台：Dashboard、Listings、Contacts/CSV Import、Audiences、Campaign Wizard/详情、Analytics、Settings。
+- Express `/api/v2`：Entra Easy Auth 身份映射、ADMIN/MARKETER/VIEWER RBAC、CSRF、速率限制和 mutation audit。
+- Prisma/PostgreSQL：冻结的 content/recipient snapshot、全局 suppression、发送批次/尝试、Webhook inbox、配额预留和 `SKIP LOCKED` durable jobs。
+- Resend：最多 100 封的 batch、同批次稳定 idempotency key、temporary retry、uncertain manual review、signed raw-body Webhook、visible/RFC 8058 unsubscribe。
+- 资产：JPG/PNG/WebP 经过 Sharp 去 EXIF 并生成 1200/600 JPEG；PDF 保留；生产写入 Azure Blob，邮件只引用永久公开 URL。
+- Azure：Container Apps Web/Worker/Migration Job、PostgreSQL 16、Blob、Key Vault、Managed Identity、VNet/private endpoints、ACR、Application Insights 和可选告警。
 
-## What It Does
+## 本地快速启动
 
-### Admin
-- Password-style admin login using `API_SECRET` with a short-lived HTTP-only session cookie
-- Dashboard with subscriber totals, engagement metrics, warmup state, and recent batches
-- Subscriber CRUD, bulk status changes, tag assignment, CSV import/export
-- Campaign editor with rich-text mode, raw HTML mode, merge tags, test send, and live preview
-- Image asset upload for email templates, including inline embedded-image sending support
-
-### Sending
-- Sends through Resend batch API when possible
-- Automatically falls back to throttled single-send mode when a template uses embedded images
-- Campaign delivery is deduplicated per campaign, not per day across the whole system
-- DB-backed drip queue with resumable jobs and retry handling
-- Warmup-aware drip defaults for newer domains
-
-### Compliance And Safety
-- Unsubscribe links and `List-Unsubscribe` headers
-- Bounce/complaint/suppression webhooks automatically suppress future sends
-- Delivery delayed, failed, and suppressed events are surfaced in admin history
-- Public subscribe endpoint supports double opt-in, resend cooldowns, per-IP / per-email rate limiting, and a honeypot field
-- Admin HTML is sanitized on save/send and previewed inside a sandboxed iframe
-- Resend webhook signatures are verified against the raw request body
-
-## Architecture
-
-### Stack
-- Runtime: Node.js + TypeScript
-- API: Express
-- Database: SQLite via `better-sqlite3`
-- Mail transport: Resend API
-- Frontend: Vanilla HTML/CSS/JS
-- Deployment: Docker / Railway
-
-### Storage
-- `data/email_service.db`: SQLite database
-- `data/email-assets/`: uploaded email images and asset manifest
-
-Mount `data/` on a persistent volume in production.
-
-You can relocate runtime storage with `DATA_DIR`, `DATABASE_PATH`, and `BACKUP_DIR`.
-
-## Quick Start
+要求 Node.js 22、Docker 与 Docker Compose。
 
 ```bash
-git clone https://github.com/okjusthere/emailService.git
-cd emailService
-npm install
+npm ci
 cp .env.example .env
-# edit .env
+# 将 SESSION_SECRET 改为至少 16 字节的本地随机值
+npm run db:up
+npm run prisma:migrate:deploy
+npm run db:seed
 npm run dev
 ```
 
-Open [http://localhost:3000/admin](http://localhost:3000/admin).
-
-## Environment Variables
+打开 `http://localhost:5173`，使用 `.env` 中 `LOCAL_ADMIN_EMAIL` 登录。另一个终端启动 Worker：
 
 ```bash
-# Required
-RESEND_API_KEY=re_xxxxxxxxxxxx
-FROM_EMAIL=newsletter@yourdomain.com
-FROM_NAME=Your Company
-REPLY_TO_EMAIL=hello@yourdomain.com
-API_SECRET=your-admin-secret
-BASE_URL=https://your-domain.com
-DATA_DIR=./data
-BACKUP_DIR=./backups
-COMPANY_NAME=Your Company Inc.
-COMPANY_ADDRESS=123 Main St, City, State ZIP
-
-# Delivery
-DAILY_SEND_COUNT=5000
-BATCH_SIZE=100
-SEND_START_DATE=2026-03-25
-RESEND_WEBHOOK_SECRET=whsec_xxxxxxxxxxxx
-
-# Admin auth
-ADMIN_SESSION_TTL_HOURS=12
-
-# Subscribe endpoint hardening
-DOUBLE_OPTIN=true
-SUBSCRIBE_ALLOWED_ORIGINS=https://your-domain.com,https://www.your-site.com
-SUBSCRIBE_RATE_WINDOW_MINUTES=60
-SUBSCRIBE_IP_WINDOW_MAX=20
-SUBSCRIBE_EMAIL_WINDOW_MAX=5
-CONFIRMATION_RESEND_COOLDOWN_MINUTES=15
+npm run dev:worker
 ```
 
-Notes:
+默认 `EMAIL_DELIVERY_MODE=disabled`，不会调用外部邮件发送。测试使用 `FakeEmailProvider`，也不会调用 Resend。Compose 默认把 PostgreSQL 映射到 `localhost:5434`，可用 `POSTGRES_PORT` 覆盖。
 
-- `BASE_URL` should be a real HTTPS origin in production. If you accidentally provide a bare domain, the service normalizes it to `https://...` before generating unsubscribe links.
-- `SUBSCRIBE_ALLOWED_ORIGINS` should list every origin allowed to host your embedded subscribe form. If omitted, it defaults to `BASE_URL`'s origin.
-- In production, `RESEND_WEBHOOK_SECRET` should always be set.
-- `API_SECRET` is still accepted on `x-api-secret` for scripted admin API access, but the browser admin uses a session cookie after login.
-- `DATABASE_PATH` overrides the SQLite file directly; otherwise it lives under `DATA_DIR`.
-- Open and click tracking are controlled in Resend's domain settings. For cold or reputation-sensitive sends, prefer a custom tracking domain or disable tracking in Resend.
-
-## Verification
+## 运行角色
 
 ```bash
-npm run check
-npm test
+APP_ROLE=web npm start
+APP_ROLE=worker npm start
+APP_ROLE=migrate npm start
 ```
 
-`npm run check` runs the production build plus a frontend syntax check. `npm test` runs a small integration test suite against a temporary SQLite database.
+- `web` 仅提供 HTTP API/SPA。
+- `worker` 仅轮询 PostgreSQL jobs、发送批次和处理 Webhook inbox。
+- `migrate` 依次运行 `prisma migrate deploy` 和幂等种子，然后退出。
 
-## Backups
+三者使用同一个 `Dockerfile`。
 
-Create a timestamped backup with:
+## 常用命令
 
 ```bash
-npm run backup
+npm run format:check
+npm run lint
+npm run typecheck
+npm run test:unit
+npm run test:api
+npm run test:integration
+npm run test:e2e
+npm run test:coverage
+npm run build
+npm run docker:build
+npm run infra:lint
+npm run openapi:lint
+npm audit --audit-level=high
+npm run licenses:check
 ```
 
-The backup script:
+Integration 与 E2E 脚本分别只创建/删除 `homix_marketing_test` 和 `homix_marketing_e2e`；它们不会删除开发数据库。脚本会启动本地 PostgreSQL，应用迁移和 seed；Playwright 随后自动启动 Web 与 Worker，Web 进程直接提供已构建的 SPA 静态资源。
 
-- creates a consistent SQLite snapshot via `VACUUM INTO`
-- copies uploaded email assets and their manifest
-- writes backup metadata to `metadata.json`
+Coverage 分为快速 unit/domain 门禁与 PostgreSQL service 门禁；Campaign、Delivery、Import、Webhook 四个关键 service 均逐文件强制 statements/branches/functions/lines 不低于 80%。
 
-Restoring is intentionally manual: stop the app, replace the database and asset files from a chosen backup, then restart the service.
+## 安全默认值
 
-## Public Endpoints
+- 新环境、seed 后和数据库恢复后均为全局暂停；管理员完成 reconciliation 并记录原因后才能恢复。
+- `disabled` 禁止外发；`sandbox` 只允许 `EMAIL_TEST_ALLOWLIST`；`live` 在每次 snapshot/send 时重新验证 sender、地址、URL、测试发送和系统 readiness。
+- 生产拒绝 local auth、`DEV_BYPASS_AUTH`、非 TLS PostgreSQL 和 local storage；live delivery 另行拒绝占位公司地址与 localhost `BASE_URL`。
+- Key Vault reference 承载 secret；代码、Bicep 参数示例、前端 bundle 和日志不包含真实值。
+- 公共路由只包括 health、Resend Webhook、unsubscribe 与本地资产；`/api/v2/*` 始终在应用层再做身份和角色校验。
 
-| Endpoint | Method | Description |
-| --- | --- | --- |
-| `/health` | `GET` | Basic health check |
-| `/subscribe` | `GET` | Hosted subscribe page |
-| `/api/subscribe` | `POST` | Public subscribe API |
-| `/api/subscribe/confirm` | `GET` | Double opt-in confirmation |
-| `/unsubscribe` | `GET`, `POST` | Hosted unsubscribe flow |
-| `/webhook/resend` | `POST` | Resend webhook receiver |
+完整配置见 `.env.example`。
 
-## Admin Endpoints
+## 文档
 
-| Endpoint | Method | Auth |
-| --- | --- | --- |
-| `/admin` | `GET` | Browser UI |
-| `/api/admin/login` | `POST` | `API_SECRET` in request body |
-| `/api/admin/logout` | `POST` | Session cookie |
-| `/api/admin/*` | `GET/POST/PUT/DELETE` | Session cookie or `x-api-secret` |
+- `docs/AZURE_DEPLOYMENT.md`
+- `docs/OPERATIONS_RUNBOOK.md`
+- `docs/DATA_MODEL.md`
+- `docs/API.md` 与 `openapi.yaml`
+- `docs/SECURITY.md`
+- `docs/MIGRATION.md`
 
-## Railway Deployment
+## Azure 与 CI/CD
 
-1. Push the repository to GitHub.
-2. Create a Railway service from the repo.
-3. Add a volume mounted at `/app/data`.
-4. Configure the environment variables above.
-5. Deploy.
+首次部署由 `scripts/provision-azure.sh` 执行 subscription bootstrap、ACR build、资源部署和 migration；后续 release 由 `scripts/deploy-release.sh` 严格按 Migration → Web readiness → Worker 顺序推进。GitHub Actions 使用 Azure OIDC 和受保护的 `development`/`production` Environments，不保存长期 Azure client secret。
 
-Recommended production checks:
-
-- verify `/health`
-- verify `/admin`
-- configure the Resend webhook endpoint as `https://your-domain.com/webhook/resend`
-- confirm `SUBSCRIBE_ALLOWED_ORIGINS` matches every site embedding the subscribe form
-- schedule regular `npm run backup` execution against persistent storage
-
-## Project Hygiene
-
-- CI runs `npm run check` and `npm test` on pushes and pull requests.
-- Contributor workflow is documented in [CONTRIBUTING.md](/Users/weizhengle/Downloads/vibecoding/Email%20Service/CONTRIBUTING.md).
-
-## Current Positioning
-
-This project is best thought of as a lightweight Resend-backed email operations service, not a full replacement for systems like Postal or broader marketing suites like Mautic. It keeps the sending surface small and operationally simple by delegating deliverability infrastructure to Resend.
+生产首次部署仍保持 `EMAIL_DELIVERY_MODE=disabled`。真实 Entra/Resend/DNS/公司地址完成前不得切换 live。仓库包含 `azure.yaml` 供 azd 识别，但 canonical deployment 是 Bicep + Bash + GitHub Actions。
 
 ## License
 

@@ -1,21 +1,35 @@
-FROM node:22-slim
-
-# better-sqlite3 needs build tools for native compilation
-RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
-
+FROM node:22-bookworm-slim AS base
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates openssl \
+  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
-COPY package*.json .npmrc ./
-RUN npm ci --include=dev
+FROM base AS dependencies
+COPY package.json package-lock.json ./
+RUN npm ci
 
-COPY tsconfig.json ./
-COPY public ./public
+FROM dependencies AS build
+COPY tsconfig.json tsconfig.server.json eslint.config.js .prettierrc.json ./
+COPY prisma ./prisma
 COPY src ./src
+COPY scripts ./scripts
+COPY client ./client
+RUN npm run build
 
-RUN npm run build && npm prune --omit=dev
+FROM base AS production-dependencies
+COPY package.json package-lock.json ./
+COPY prisma ./prisma
+RUN npm ci --omit=dev \
+  && npm run prisma:generate \
+  && npm cache clean --force
 
-ENV NODE_ENV=production
-
+FROM base AS runtime
+ENV NODE_ENV=production APP_ROLE=web PORT=3000
+RUN groupadd --system --gid 10001 homix && useradd --system --uid 10001 --gid homix --home-dir /app homix
+COPY --from=production-dependencies --chown=homix:homix /app/node_modules ./node_modules
+COPY --from=build --chown=homix:homix /app/dist ./dist
+COPY --from=build --chown=homix:homix /app/prisma ./prisma
+COPY --chown=homix:homix package.json ./
+USER homix
 EXPOSE 3000
-
-CMD ["node", "dist/index.js"]
+ENTRYPOINT ["node", "dist/server/src/bootstrap.js"]

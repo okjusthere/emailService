@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist/server",
+    "sourceMap": true,
+    "declaration": false,
+    "jsx": "react-jsx"
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "prisma/seed.ts", "scripts/**/*.ts"],
+  "exclude": ["node_modules", "dist", "client", "tests", "src/generated"]
+}
