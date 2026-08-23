@@ -105,15 +105,12 @@ export function createApp() {
         setHeaders: (res) => res.setHeader("X-Content-Type-Options", "nosniff"),
       })
     );
-  app.use("/api/v2", requireCsrf, localDevLoginRouter);
   app.use(
     "/api/v2",
-    authenticate,
-    requireCsrf,
-    rateLimit({ windowMs: 15 * 60_000, limit: 2_000, standardHeaders: true, legacyHeaders: false }),
-    mutationAudit,
-    v2Router
+    rateLimit({ windowMs: 15 * 60_000, limit: 2_000, standardHeaders: true, legacyHeaders: false })
   );
+  app.use("/api/v2", requireCsrf, localDevLoginRouter);
+  app.use("/api/v2", authenticate, requireCsrf, mutationAudit, v2Router);
 
   const clientDir = path.join(process.cwd(), "dist", "client");
   app.use(
