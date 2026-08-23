@@ -21,6 +21,8 @@ tags:
   - { name: Campaigns }
   - { name: Analytics }
   - { name: Operations }
+  - { name: OneKey }
+  - { name: AI }
   - { name: Public }
 paths:
   /auth/me:
@@ -690,6 +692,23 @@ paths:
         requestBody: { $ref: "#/components/requestBodies/JsonBody" },
         responses: { "200": { $ref: "#/components/responses/Success" } },
       }
+    delete:
+      {
+        tags: [Senders],
+        operationId: deleteUnreferencedSenderProfile,
+        summary: Delete a sender only when no campaign references it,
+        parameters:
+          [
+            {
+              name: confirmation,
+              in: query,
+              required: true,
+              schema: { type: string, enum: [DELETE_UNREFERENCED_SENDER] },
+            },
+          ],
+        responses:
+          { "204": { description: Deleted }, "409": { $ref: "#/components/responses/Error" } },
+      }
   /sender-profiles/{id}/verify:
     parameters: [{ $ref: "#/components/parameters/Id" }]
     post:
@@ -716,6 +735,26 @@ paths:
         tags: [Senders],
         operationId: getSenderQuota,
         summary: Return recent reserved accepted and released quota,
+        responses: { "200": { $ref: "#/components/responses/Success" } },
+      }
+  /sender-profiles/{id}/reactivate:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      {
+        tags: [Senders],
+        operationId: reactivateSenderProfile,
+        summary: Reactivate a sender after explicit DNS review confirmation,
+        requestBody: { $ref: "#/components/requestBodies/JsonBody" },
+        responses: { "200": { $ref: "#/components/responses/Success" } },
+      }
+  /sender-profiles/{id}/default:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      {
+        tags: [Senders],
+        operationId: setDefaultSenderProfile,
+        summary: Atomically make a sender the default,
+        requestBody: { $ref: "#/components/requestBodies/JsonBody" },
         responses: { "200": { $ref: "#/components/responses/Success" } },
       }
   /campaigns:
@@ -1037,6 +1076,191 @@ paths:
         responses:
           { "204": { description: Suppressed }, "400": { $ref: "#/components/responses/Error" } },
       }
+  /ai/status:
+    get:
+      {
+        tags: [AI],
+        operationId: getAiStatus,
+        summary: Return server-side AI feature state without secrets,
+        responses: { "200": { $ref: "#/components/responses/Success" } },
+      }
+  /listings/{id}/ai/generate:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      {
+        tags: [AI],
+        operationId: generateListingAiCopy,
+        summary: Generate a non-destructive structured listing-copy proposal,
+        requestBody: { $ref: "#/components/requestBodies/JsonBody" },
+        responses:
+          {
+            "200": { $ref: "#/components/responses/Success" },
+            "409": { $ref: "#/components/responses/Error" },
+          },
+      }
+  /listings/{id}/ai/apply:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      {
+        tags: [AI],
+        operationId: applyListingAiCopy,
+        summary: Explicitly apply selected fields from a stored proposal,
+        requestBody: { $ref: "#/components/requestBodies/JsonBody" },
+        responses: { "200": { $ref: "#/components/responses/Success" } },
+      }
+  /campaigns/{id}/ai/generate:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      {
+        tags: [AI],
+        operationId: generateCampaignAiCopy,
+        summary: Generate three non-destructive campaign variants,
+        requestBody: { $ref: "#/components/requestBodies/JsonBody" },
+        responses: { "200": { $ref: "#/components/responses/Success" } },
+      }
+  /campaigns/{id}/ai/apply:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      {
+        tags: [AI],
+        operationId: applyCampaignAiCopy,
+        summary: Explicitly apply selected fields from one campaign variant,
+        requestBody: { $ref: "#/components/requestBodies/JsonBody" },
+        responses: { "200": { $ref: "#/components/responses/Success" } },
+      }
+  /onekey/status:
+    get:
+      {
+        tags: [OneKey],
+        operationId: getOneKeyStatus,
+        summary: Return provider index and cursor health,
+        responses: { "200": { $ref: "#/components/responses/Success" } },
+      }
+  /onekey/test:
+    post:
+      {
+        tags: [OneKey],
+        operationId: testOneKeyProvider,
+        summary: Test the configured BBO listing-data connection,
+        responses: { "200": { $ref: "#/components/responses/Success" } },
+      }
+  /onekey/sync/{kind}:
+    parameters:
+      [
+        {
+          name: kind,
+          in: path,
+          required: true,
+          schema: { type: string, enum: [initial, delta, rebuild] },
+        },
+      ]
+    post:
+      {
+        tags: [OneKey],
+        operationId: queueOneKeySync,
+        summary: Queue an initial delta or rebuild index job,
+        responses: { "202": { $ref: "#/components/responses/Success" } },
+      }
+  /onekey/listings/search:
+    get:
+      {
+        tags: [OneKey],
+        operationId: searchOneKeyListings,
+        summary: Search the local OneKey index first and BBO provider second,
+        parameters:
+          [
+            {
+              name: q,
+              in: query,
+              required: true,
+              schema: { type: string, minLength: 2, maxLength: 200 },
+            },
+            { $ref: "#/components/parameters/Limit" },
+          ],
+        responses: { "200": { $ref: "#/components/responses/Collection" } },
+      }
+  /onekey/listings/{sourceKey}:
+    parameters: [{ $ref: "#/components/parameters/SourceKey" }]
+    get:
+      {
+        tags: [OneKey],
+        operationId: reviewOneKeyListing,
+        summary: Return source facts beside any imported marketing record,
+        responses: { "200": { $ref: "#/components/responses/Success" } },
+      }
+  /onekey/listings/{sourceKey}/import:
+    parameters: [{ $ref: "#/components/parameters/SourceKey" }]
+    post:
+      {
+        tags: [OneKey],
+        operationId: importOneKeyListing,
+        summary: Import any viewable listing into a draft without an ownership gate,
+        requestBody: { $ref: "#/components/requestBodies/JsonBody" },
+        responses: { "201": { $ref: "#/components/responses/Success" } },
+      }
+  /onekey/listings/{sourceKey}/recipients:
+    parameters: [{ $ref: "#/components/parameters/SourceKey" }]
+    get:
+      {
+        tags: [OneKey],
+        operationId: previewOneKeyRecipientCandidates,
+        summary: Preview active external agents matched through recent Closed transactions,
+        responses: { "200": { $ref: "#/components/responses/Success" } },
+      }
+  /listings/{id}/onekey/refresh:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      {
+        tags: [OneKey],
+        operationId: refreshImportedOneKeyListing,
+        summary: Refresh source facts while preserving all marketing overrides,
+        responses: { "200": { $ref: "#/components/responses/Success" } },
+      }
+  /listings/{id}/onekey/media/retry:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      {
+        tags: [OneKey],
+        operationId: retryOneKeyMediaImport,
+        summary: Retry bounded copying into Homix-owned storage,
+        responses: { "202": { $ref: "#/components/responses/Success" } },
+      }
+  /listings/{id}/onekey/recipients/import:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      {
+        tags: [OneKey],
+        operationId: importOneKeyRecipientCandidates,
+        summary: Explicitly import candidates and create a saved audience without sending,
+        requestBody: { $ref: "#/components/requestBodies/JsonBody" },
+        responses: { "201": { $ref: "#/components/responses/Success" } },
+      }
+  /operations/manual-review:
+    get:
+      {
+        tags: [Operations],
+        operationId: listManualReviewBatches,
+        summary: List uncertain provider submissions awaiting an operator,
+        responses: { "200": { $ref: "#/components/responses/Collection" } },
+      }
+  /operations/manual-review/{id}/resolve:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      {
+        tags: [Operations],
+        operationId: resolveManualReviewBatch,
+        summary: Apply a confirmed audited quota-safe resolution,
+        requestBody: { $ref: "#/components/requestBodies/JsonBody" },
+        responses: { "200": { $ref: "#/components/responses/Success" } },
+      }
+  /operations/webhooks:
+    get:
+      {
+        tags: [Operations],
+        operationId: listWebhookReconciliation,
+        summary: List unresolved retry-pending and dead-letter webhooks,
+        responses: { "200": { $ref: "#/components/responses/Collection" } },
+      }
 components:
   securitySchemes:
     cookieAuth:
@@ -1051,6 +1275,8 @@ components:
     AssetId: { name: assetId, in: path, required: true, schema: { type: string, format: uuid } }
     RecipientId:
       { name: recipientId, in: path, required: true, schema: { type: string, format: uuid } }
+    SourceKey:
+      { name: sourceKey, in: path, required: true, schema: { type: string, maxLength: 255 } }
     Page:
       { name: page, in: query, required: false, schema: { type: integer, minimum: 1, default: 1 } }
     Limit:

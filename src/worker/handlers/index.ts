@@ -6,6 +6,11 @@ import { prisma } from "../../db/prisma.js";
 import { processContactImport } from "../../modules/imports/service.js";
 import { config } from "../../config/index.js";
 import { snapshotCampaign } from "../../modules/campaigns/service.js";
+import {
+  importOneKeyMedia,
+  runOneKeyDeltaSync,
+  runOneKeyInitialSync,
+} from "../../modules/onekey/service.js";
 
 function objectPayload(value: Prisma.JsonValue): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -24,6 +29,7 @@ export async function handleJob(type: JobType, payloadValue: Prisma.JsonValue): 
       });
       return;
     case JobType.PROCESS_WEBHOOK_EVENT:
+    case JobType.RECONCILE_WEBHOOK_EVENT:
       if (typeof payload.eventId !== "string") throw new Error("Webhook job lacks eventId");
       await processWebhookEvent(payload.eventId);
       return;
@@ -102,6 +108,16 @@ export async function handleJob(type: JobType, payloadValue: Prisma.JsonValue): 
     case JobType.IMPORT_CONTACTS:
       if (typeof payload.importId !== "string") throw new Error("Import job lacks importId");
       await processContactImport(payload.importId);
+      return;
+    case JobType.ONEKEY_MEDIA_IMPORT:
+      if (typeof payload.listingId !== "string") throw new Error("Media import lacks listingId");
+      await importOneKeyMedia(payload.listingId);
+      return;
+    case JobType.ONEKEY_INITIAL_SYNC:
+      await runOneKeyInitialSync();
+      return;
+    case JobType.ONEKEY_DELTA_SYNC:
+      await runOneKeyDeltaSync();
       return;
   }
 }

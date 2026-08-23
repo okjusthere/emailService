@@ -33,6 +33,16 @@ jobs:
       USE_RESEND_SECRETS: "true"
       USE_PREVIOUS_RESEND_WEBHOOK_SECRET: ${{ vars.USE_PREVIOUS_RESEND_WEBHOOK_SECRET }}
       RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT: ${{ vars.RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT }}
+      USE_PREVIOUS_UNSUBSCRIBE_SIGNING_SECRET: ${{ vars.USE_PREVIOUS_UNSUBSCRIBE_SIGNING_SECRET || 'false' }}
+      UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET_EXPIRES_AT: ${{ vars.UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET_EXPIRES_AT }}
+      ONEKEY_PROVIDER: ${{ vars.ONEKEY_PROVIDER || 'disabled' }}
+      BBO_LISTING_API_BASE_URL: ${{ vars.BBO_LISTING_API_BASE_URL }}
+      USE_BBO_MARKETING_API_KEY: ${{ vars.USE_BBO_MARKETING_API_KEY || 'false' }}
+      USE_MLS_GRID_ACCESS_TOKEN: ${{ vars.USE_MLS_GRID_ACCESS_TOKEN || 'false' }}
+      ONEKEY_SYNC_ENABLED: ${{ vars.ONEKEY_SYNC_ENABLED || 'false' }}
+      AI_PROVIDER: ${{ vars.AI_PROVIDER || 'disabled' }}
+      USE_OPENAI_API_KEY: ${{ vars.USE_OPENAI_API_KEY || 'false' }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5-mini' }}
       USE_ENTRA_CLIENT_SECRET: "true"
       EMAIL_DELIVERY_MODE: ${{ vars.EMAIL_DELIVERY_MODE }}
       DEPLOYMENT_TIER: ${{ vars.DEPLOYMENT_TIER || 'starter' }}
@@ -63,7 +73,7 @@ jobs:
       - name: Bicep what-if
         env:
           IMAGE_URI: ${{ steps.image.outputs.uri }}
-        run: az deployment group what-if -g "$AZURE_RESOURCE_GROUP" -f infra/main.bicep -p environment=prod acrName="$AZURE_ACR_NAME" entraTenantId="$ENTRA_TENANT_ID" entraClientId="$ENTRA_CLIENT_ID" baseUrl="$HOMIX_BASE_URL" bootstrapAdminEmails="$BOOTSTRAP_ADMIN_EMAILS" companyPostalAddress="$COMPANY_POSTAL_ADDRESS" alertEmail="$ALERT_EMAIL" useResendSecrets=true usePreviousResendWebhookSecret="${USE_PREVIOUS_RESEND_WEBHOOK_SECRET:-false}" resendWebhookPreviousSecretExpiresAt="${RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT:-}" useEntraClientSecret=true emailDeliveryMode="$EMAIL_DELIVERY_MODE" containerImage="$IMAGE_URI" migrationContainerImage="$IMAGE_URI" --no-pretty-print > bicep-what-if.txt
+        run: az deployment group what-if -g "$AZURE_RESOURCE_GROUP" -f infra/main.bicep -p environment=prod acrName="$AZURE_ACR_NAME" entraTenantId="$ENTRA_TENANT_ID" entraClientId="$ENTRA_CLIENT_ID" baseUrl="$HOMIX_BASE_URL" bootstrapAdminEmails="$BOOTSTRAP_ADMIN_EMAILS" companyPostalAddress="$COMPANY_POSTAL_ADDRESS" alertEmail="$ALERT_EMAIL" useResendSecrets=true usePreviousResendWebhookSecret="${USE_PREVIOUS_RESEND_WEBHOOK_SECRET:-false}" resendWebhookPreviousSecretExpiresAt="${RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT:-}" usePreviousUnsubscribeSigningSecret="${USE_PREVIOUS_UNSUBSCRIBE_SIGNING_SECRET:-false}" unsubscribePreviousSigningSecretExpiresAt="${UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET_EXPIRES_AT:-}" oneKeyProvider="${ONEKEY_PROVIDER:-disabled}" bboListingApiBaseUrl="${BBO_LISTING_API_BASE_URL:-}" useBboMarketingApiKey="${USE_BBO_MARKETING_API_KEY:-false}" useMlsGridAccessToken="${USE_MLS_GRID_ACCESS_TOKEN:-false}" oneKeySyncEnabled="${ONEKEY_SYNC_ENABLED:-false}" aiProvider="${AI_PROVIDER:-disabled}" useOpenAiApiKey="${USE_OPENAI_API_KEY:-false}" openAiModel="${OPENAI_MODEL:-gpt-5-mini}" useEntraClientSecret=true emailDeliveryMode="$EMAIL_DELIVERY_MODE" containerImage="$IMAGE_URI" migrationContainerImage="$IMAGE_URI" --no-pretty-print > bicep-what-if.txt
       - uses: actions/upload-artifact@v4
         with: { name: bicep-production-what-if, path: bicep-what-if.txt }
       - run: chmod +x scripts/deploy-release.sh

@@ -7,6 +7,7 @@
     "node": ">=22 <23"
   },
   "scripts": {
+    "postinstall": "prisma generate",
     "dev": "concurrently -k -n web,client \"npm:dev:web\" \"npm:dev:client\"",
     "dev:web": "cross-env APP_ROLE=web tsx watch src/bootstrap.ts",
     "dev:worker": "cross-env APP_ROLE=worker tsx watch src/bootstrap.ts",
@@ -41,6 +42,8 @@
     "infra:lint": "az bicep build --file infra/bootstrap.bicep --stdout > /dev/null && az bicep build --file infra/main.bicep --stdout > /dev/null",
     "openapi:lint": "redocly lint openapi.yaml --config .redocly.yaml",
     "licenses:check": "node scripts/check-licenses.mjs",
+    "source:archive:check": "bash scripts/build-source-archive.sh --check",
+    "source:archive": "bash scripts/build-source-archive.sh",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {

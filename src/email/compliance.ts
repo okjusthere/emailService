@@ -35,6 +35,20 @@ export function verifyUnsubscribeToken(token: string, secret: string): string | 
   }
 }
 
+export function verifyUnsubscribeTokenWithRotation(
+  token: string,
+  currentSecret: string,
+  previousSecret?: string,
+  previousExpiresAt?: string
+): string | null {
+  const current = verifyUnsubscribeToken(token, currentSecret);
+  if (current) return current;
+  if (!previousSecret || !previousExpiresAt) return null;
+  const expiry = Date.parse(previousExpiresAt);
+  if (!Number.isFinite(expiry) || expiry <= Date.now()) return null;
+  return verifyUnsubscribeToken(token, previousSecret);
+}
+
 export function unsubscribeHeaders(url: string): Record<string, string> {
   return { "List-Unsubscribe": `<${url}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" };
 }

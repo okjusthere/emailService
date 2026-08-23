@@ -23,6 +23,7 @@ import {
   updateCampaign,
 } from "../../src/modules/campaigns/service.js";
 import { dispatchCampaign, executeReservedBatch } from "../../src/modules/delivery/service.js";
+import { resolveManualReview } from "../../src/modules/delivery/manualReview.js";
 import { localDate } from "../../src/modules/delivery/quota.js";
 import { ingestWebhook, processWebhookEvent } from "../../src/modules/webhooks/service.js";
 import { recomputeCampaignStats } from "../../src/modules/analytics/service.js";
@@ -566,16 +567,19 @@ describe("PostgreSQL delivery invariants", () => {
     ).rejects.toThrow("Mapped CSV column not found");
   });
 
-  it("runs the complete campaign draft, preview, test, ready, and snapshot lifecycle", async () => {
+  it("runs the complete campaign lifecycle while AI_PROVIDER is disabled", async () => {
     const fixture = await createRenderableCampaign();
     const mutableConfig = config as {
       deliveryMode: "disabled" | "sandbox" | "live";
       testAllowlist: string[];
+      aiProvider: "disabled" | "openai" | "fake";
     };
     const originalMode = mutableConfig.deliveryMode;
     const originalAllowlist = mutableConfig.testAllowlist;
+    const originalAiProvider = mutableConfig.aiProvider;
     const testEmail = "admin@homixny.com";
     try {
+      mutableConfig.aiProvider = "disabled";
       const page = await listCampaigns({
         page: 1,
         limit: 1,
@@ -611,7 +615,13 @@ describe("PostgreSQL delivery invariants", () => {
 
       mutableConfig.deliveryMode = "disabled";
       await expect(
-        testSendCampaign(fixture.campaign.id, testEmail, fixture.campaign.version, testActor())
+        testSendCampaign(
+          fixture.campaign.id,
+          testEmail,
+          fixture.campaign.version,
+          randomUUID(),
+          testActor()
+        )
       ).rejects.toMatchObject({ code: "DELIVERY_DISABLED" });
 
       mutableConfig.deliveryMode = "sandbox";
@@ -621,18 +631,32 @@ describe("PostgreSQL delivery invariants", () => {
           fixture.campaign.id,
           "not-allowlisted@example.com",
           fixture.campaign.version,
+          randomUUID(),
           testActor()
         )
       ).rejects.toMatchObject({ code: "TEST_RECIPIENT_NOT_ALLOWED" });
       await expect(
-        testSendCampaign(fixture.campaign.id, testEmail, fixture.campaign.version + 1, testActor())
+        testSendCampaign(
+          fixture.campaign.id,
+          testEmail,
+          fixture.campaign.version + 1,
+          randomUUID(),
+          testActor()
+        )
       ).rejects.toMatchObject({ code: "CAMPAIGN_VERSION_CONFLICT" });
 
       const rejectedProvider = new FakeEmailProvider();
       rejectedProvider.mode = "permanent";
       setEmailProviderForTest(rejectedProvider);
+      const acceptedRequestId = randomUUID();
       await expect(
-        testSendCampaign(fixture.campaign.id, testEmail, fixture.campaign.version, testActor())
+        testSendCampaign(
+          fixture.campaign.id,
+          testEmail,
+          fixture.campaign.version,
+          acceptedRequestId,
+          testActor()
+        )
       ).rejects.toMatchObject({ code: "TEST_SEND_FAILED" });
 
       const acceptedProvider = new FakeEmailProvider();
@@ -642,6 +666,7 @@ describe("PostgreSQL delivery invariants", () => {
           fixture.campaign.id,
           testEmail.toUpperCase(),
           fixture.campaign.version,
+          acceptedRequestId,
           testActor()
         )
       ).resolves.toMatchObject({
@@ -653,6 +678,16 @@ describe("PostgreSQL delivery invariants", () => {
         subject: "[TEST] Lifecycle campaign",
         headers: { "X-Homix-Test": "true" },
       });
+      await expect(
+        testSendCampaign(
+          fixture.campaign.id,
+          testEmail,
+          fixture.campaign.version,
+          acceptedRequestId,
+          testActor()
+        )
+      ).resolves.toMatchObject({ accepted: true, duplicate: true });
+      expect(acceptedProvider.outbound).toHaveLength(1);
 
       const ready = await markCampaignReady(fixture.campaign.id, testActor());
       expect(ready.status).toBe("READY");
@@ -729,6 +764,7 @@ describe("PostgreSQL delivery invariants", () => {
     } finally {
       mutableConfig.deliveryMode = originalMode;
       mutableConfig.testAllowlist = originalAllowlist;
+      mutableConfig.aiProvider = originalAiProvider;
       setEmailProviderForTest(undefined);
     }
   });
@@ -1321,6 +1357,38 @@ describe("PostgreSQL delivery invariants", () => {
     ).toBe("MANUAL_REVIEW");
     await executeReservedBatch(fixture.campaign.id, claimed.batchId);
     expect(provider.outbound).toHaveLength(1);
+    await resolveManualReview(
+      claimed.batchId,
+      {
+        action: "ATTACH_PROVIDER_ID",
+        reason: "Confirmed the accepted provider message in the integration fixture",
+        recipientId: fixture.recipients[0]!.id,
+        providerEmailId: `confirmed-${randomUUID()}`,
+      },
+      testActor()
+    );
+    expect(
+      await prisma.campaignRecipient.findUniqueOrThrow({
+        where: { id: fixture.recipients[0]!.id },
+      })
+    ).toMatchObject({ sendState: "ACCEPTED", resendEmailId: expect.stringMatching(/^confirmed-/) });
+    expect(
+      await prisma.senderDailyUsage.findUniqueOrThrow({
+        where: {
+          senderProfileId_localDate: {
+            senderProfileId: fixture.sender.id,
+            localDate: localDate(new Date(), fixture.sender.timezone),
+          },
+        },
+      })
+    ).toMatchObject({ reservedCount: 0, acceptedCount: 1 });
+    await expect(
+      resolveManualReview(
+        claimed.batchId,
+        { action: "KEEP_IN_REVIEW", reason: "Duplicate operator action must be rejected" },
+        testActor()
+      )
+    ).rejects.toMatchObject({ code: "MANUAL_REVIEW_ALREADY_RESOLVED", status: 409 });
   });
 
   it("reduces duplicate and out-of-order webhook events without state regression", async () => {
@@ -1515,8 +1583,11 @@ describe("PostgreSQL delivery invariants", () => {
     });
     await processWebhookEvent(orphan.id);
     expect(await prisma.emailEvent.findUniqueOrThrow({ where: { id: orphan.id } })).toMatchObject({
-      processedAt: expect.any(Date),
+      processedAt: null,
       processingError: "orphan: no campaign recipient matched",
+      reconciliationStatus: "RETRY_PENDING",
+      reconciliationAttempts: 1,
+      nextReconcileAt: expect.any(Date),
     });
   });
 
@@ -1558,7 +1629,11 @@ describe("PostgreSQL delivery invariants", () => {
     await processWebhookEvent(orphanIngest.id);
     expect(
       await prisma.emailEvent.findUniqueOrThrow({ where: { webhookId: noProviderId } })
-    ).toMatchObject({ processingError: "orphan: no campaign recipient matched" });
+    ).toMatchObject({
+      processedAt: null,
+      processingError: "orphan: no campaign recipient matched",
+      reconciliationStatus: "RETRY_PENDING",
+    });
 
     await expect(ingestWebhook(provider, input)).resolves.toMatchObject({ duplicate: false });
     await expect(ingestWebhook(provider, input)).resolves.toMatchObject({ duplicate: true });

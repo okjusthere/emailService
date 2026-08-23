@@ -103,29 +103,80 @@ test("admin completes a listing campaign and observes delivery", async ({ page }
     )
     .toBe("COMPLETED");
 
-  const listingResponse = await api.post("/api/v2/listings", {
+  const oneKeySearchResponse = await api.get("/api/v2/onekey/listings/search?q=90000001");
+  expect(oneKeySearchResponse.ok(), await oneKeySearchResponse.text()).toBeTruthy();
+  const oneKeySearch = await oneKeySearchResponse.json();
+  expect(oneKeySearch.items).toHaveLength(1);
+  expect(oneKeySearch.items[0]).toMatchObject({
+    sourceKey: "KEY900000001",
+    listingId: "90000001",
+    postalCode: "11354",
+  });
+
+  const listingResponse = await api.post(
+    `/api/v2/onekey/listings/${oneKeySearch.items[0].sourceKey}/import`,
+    {
+      headers: csrf,
+      data: { agentId: broker.id },
+    }
+  );
+  expect(listingResponse.status()).toBe(201);
+  const listingImport = await listingResponse.json();
+  expect(listingImport.created).toBe(true);
+  const listing = listingImport.listing;
+  expect(listing).toMatchObject({
+    source: "ONEKEY",
+    sourceKey: "KEY900000001",
+    status: "DRAFT",
+  });
+
+  const listingReview = await api.get(`/api/v2/onekey/listings/${listing.sourceKey}`);
+  expect(listingReview.ok(), await listingReview.text()).toBeTruthy();
+  expect((await listingReview.json()).sourceFacts).toMatchObject({
+    listingId: "90000001",
+    address: "136-20 Roosevelt Ave, Flushing, NY 11354",
+  });
+
+  const listingAiResponse = await api.post(`/api/v2/listings/${listing.id}/ai/generate`, {
+    headers: csrf,
+    data: { tone: "professional" },
+  });
+  expect(listingAiResponse.ok(), await listingAiResponse.text()).toBeTruthy();
+  const listingAi = await listingAiResponse.json();
+  expect(listingAi.proposal.highlights).toHaveLength(3);
+  const listingApplyResponse = await api.post(`/api/v2/listings/${listing.id}/ai/apply`, {
     headers: csrf,
     data: {
-      internalName: `E2E Harbor ${unique}`,
-      title: `Harbor Avenue ${unique}`,
-      slug: `harbor-avenue-${unique}`,
-      status: "DRAFT",
-      transactionType: "FOR_SALE",
-      propertyType: "RETAIL",
-      addressLine1: "42 Harbor Avenue",
-      city: "Huntington",
-      stateCode: "NY",
-      postalCode: "11743",
-      askingPrice: "2450000",
-      buildingSqFt: 8500,
-      shortDescription: "Waterfront retail investment",
-      highlights: ["8,500 SF", "Waterfront access"],
-      listingUrl: "https://homixny.com/listings/harbor",
-      agentId: broker.id,
+      generationId: listingAi.generationId,
+      fields: ["title", "shortDescription", "longDescription", "highlights"],
     },
   });
-  expect(listingResponse.ok()).toBeTruthy();
-  const listing = await listingResponse.json();
+  expect(listingApplyResponse.ok(), await listingApplyResponse.text()).toBeTruthy();
+  expect((await listingApplyResponse.json()).title).toContain("136-20 Roosevelt Ave");
+
+  const recipientPreview = await api.get(
+    `/api/v2/onekey/listings/${listing.sourceKey}/recipients?nearbyZipCount=3&closedMonths=12&limit=100`
+  );
+  expect(recipientPreview.ok(), await recipientPreview.text()).toBeTruthy();
+  expect((await recipientPreview.json()).recipients[0]).toMatchObject({
+    email: "external-agent@example.com",
+    matchedSameZip: true,
+  });
+  const recipientImport = await api.post(
+    `/api/v2/listings/${listing.id}/onekey/recipients/import`,
+    {
+      headers: csrf,
+      data: {
+        nearbyZipCount: 3,
+        closedMonths: 12,
+        limit: 100,
+        audienceName: `OneKey matches ${unique}`,
+      },
+    }
+  );
+  expect(recipientImport.status()).toBe(201);
+  expect(await recipientImport.json()).toMatchObject({ created: 1, suppressed: 0 });
+
   const png = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
     "base64"
@@ -141,7 +192,10 @@ test("admin completes a listing campaign and observes delivery", async ({ page }
   expect(asset.ok()).toBeTruthy();
   const activation = await api.patch(`/api/v2/listings/${listing.id}`, {
     headers: csrf,
-    data: { status: "ACTIVE" },
+    data: {
+      status: "ACTIVE",
+      listingUrl: "https://homixny.com/listings/roosevelt-avenue",
+    },
   });
   expect(activation.ok(), await activation.text()).toBeTruthy();
 
@@ -163,35 +217,57 @@ test("admin completes a listing campaign and observes delivery", async ({ page }
   const campaignResponse = await api.post("/api/v2/campaigns", {
     headers: csrf,
     data: {
-      name: `Harbor launch ${unique}`,
+      name: `Roosevelt launch ${unique}`,
       listingId: listing.id,
       senderProfileId: sender.id,
       replyToAgentId: broker.id,
       savedAudienceId: audience.id,
       templateKey: "LISTING_BRANDED",
-      subject: "{{first_name}}, a new Huntington opportunity",
-      preheader: "Waterfront retail from Homix Realty",
+      subject: "{{first_name}}, a new Flushing opportunity",
+      preheader: "A new OneKey listing from Homix Realty",
       introHtml: "<p>I wanted to share this new opportunity with you.</p>",
       ctaLabel: "View listing",
-      ctaUrl: "https://homixny.com/listings/harbor",
+      ctaUrl: "https://homixny.com/listings/roosevelt-avenue",
       audienceFilter: audience.filter,
       timezone: "America/New_York",
     },
   });
   expect(campaignResponse.ok()).toBeTruthy();
   const campaign = await campaignResponse.json();
+  const campaignAiResponse = await api.post(`/api/v2/campaigns/${campaign.id}/ai/generate`, {
+    headers: csrf,
+    data: { tone: "warm" },
+  });
+  expect(campaignAiResponse.ok(), await campaignAiResponse.text()).toBeTruthy();
+  const campaignAi = await campaignAiResponse.json();
+  expect(campaignAi.proposal.variants).toHaveLength(3);
+  const campaignAiApplyResponse = await api.post(`/api/v2/campaigns/${campaign.id}/ai/apply`, {
+    headers: csrf,
+    data: {
+      generationId: campaignAi.generationId,
+      variantIndex: campaignAi.proposal.recommendedIndex,
+      fields: ["subject", "preheader", "introText", "ctaLabel"],
+    },
+  });
+  expect(campaignAiApplyResponse.ok(), await campaignAiApplyResponse.text()).toBeTruthy();
+  const campaignAfterAi = await campaignAiApplyResponse.json();
+  expect(campaignAfterAi.subject).toContain("136-20 Roosevelt Ave");
   const preview = await (
     await api.post(`/api/v2/campaigns/${campaign.id}/preview`, {
       headers: csrf,
       data: { firstName: "Avery" },
     })
   ).json();
-  expect(preview.html).toContain("Harbor Avenue");
+  expect(preview.html).toContain("136-20 Roosevelt Ave");
   expect(
     (
       await api.post(`/api/v2/campaigns/${campaign.id}/test-send`, {
         headers: csrf,
-        data: { email: "admin@homixny.com", version: campaign.version },
+        data: {
+          email: "admin@homixny.com",
+          version: campaignAfterAi.version,
+          clientRequestId: randomUUID(),
+        },
       })
     ).ok()
   ).toBeTruthy();
@@ -213,7 +289,7 @@ test("admin completes a listing campaign and observes delivery", async ({ page }
     (
       await api.post(`/api/v2/campaigns/${campaign.id}/send-now`, {
         headers: { ...csrf, "Idempotency-Key": `e2e-${unique}` },
-        data: { version: campaign.version },
+        data: { version: campaignAfterAi.version },
       })
     ).ok()
   ).toBeTruthy();
@@ -256,12 +332,12 @@ test("admin completes a listing campaign and observes delivery", async ({ page }
     .toBe("DELIVERED");
 
   await page.goto("/campaigns");
-  await expect(page.getByText(`Harbor launch ${unique}`)).toBeVisible();
-  await expect(page.getByRole("row").filter({ hasText: `Harbor launch ${unique}` })).toContainText(
-    "COMPLETED"
-  );
+  await expect(page.getByText(`Roosevelt launch ${unique}`)).toBeVisible();
+  await expect(
+    page.getByRole("row").filter({ hasText: `Roosevelt launch ${unique}` })
+  ).toContainText("COMPLETED");
 
-  const raw = `${accepted.id}.${createHmac("sha256", "playwright-session-secret-at-least-sixteen-bytes").update(accepted.id).digest("base64url")}`;
+  const raw = `${accepted.id}.${createHmac("sha256", "playwright-unsubscribe-secret-at-least-thirty-two-bytes").update(accepted.id).digest("base64url")}`;
   const token = Buffer.from(raw).toString("base64url");
   await page.goto(`/unsubscribe?token=${encodeURIComponent(token)}`);
   await expect(page.getByRole("heading", { name: "Stop marketing emails?" })).toBeVisible();
@@ -272,4 +348,34 @@ test("admin completes a listing campaign and observes delivery", async ({ page }
   await page.goto("/");
   await page.getByRole("button", { name: "Open navigation" }).click();
   await expect(page.getByRole("link", { name: "Listings" })).toBeVisible();
+});
+
+test("searches the populated OneKey index by address and reuses the imported listing", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Continue" }).click();
+  const api = page.request;
+  await expect.poll(async () => (await api.get("/api/v2/auth/me")).status()).toBe(200);
+
+  const search = await api.get(
+    `/api/v2/onekey/listings/search?q=${encodeURIComponent("136-20 Roosevelt Ave")}`
+  );
+  expect(search.ok(), await search.text()).toBeTruthy();
+  const result = await search.json();
+  expect(result.source).toBe("local");
+  expect(result.items[0]).toMatchObject({
+    sourceKey: "KEY900000001",
+    importedListingId: expect.stringMatching(/[0-9a-f-]{36}/),
+  });
+
+  const agents = await api.get("/api/v2/agents?limit=1");
+  expect(agents.ok(), await agents.text()).toBeTruthy();
+  const agentId = (await agents.json()).items[0].id;
+  const reused = await api.post(`/api/v2/onekey/listings/KEY900000001/import`, {
+    headers: csrf,
+    data: { agentId },
+  });
+  expect(reused.status()).toBe(200);
+  expect(await reused.json()).toMatchObject({ created: false });
 });

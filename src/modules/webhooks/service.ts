@@ -28,6 +28,7 @@ export async function ingestWebhook(
           eventCreatedAt: verified.createdAt,
           campaignRecipientId: recipient?.id,
           payload: verified.payload as Prisma.InputJsonValue,
+          reconciliationStatus: recipient ? "MATCHED" : "RECEIVED",
         },
       });
       await tx.job.create({
@@ -51,10 +52,14 @@ export async function ingestWebhook(
 
 export async function processWebhookEvent(eventId: string): Promise<void> {
   const result = await prisma.$transaction(async (tx) => {
-    const lockedEvents = await tx.$queryRaw<Array<{ id: string; processed_at: Date | null }>>(
-      Prisma.sql`SELECT id, processed_at FROM email_events WHERE id = ${eventId}::uuid FOR UPDATE`
+    const lockedEvents = await tx.$queryRaw<Array<{ id: string; reconciliation_status: string }>>(
+      Prisma.sql`SELECT id, reconciliation_status FROM email_events WHERE id = ${eventId}::uuid FOR UPDATE`
     );
-    if (!lockedEvents[0] || lockedEvents[0].processed_at) return null;
+    if (
+      !lockedEvents[0] ||
+      ["PROCESSED", "DEAD_LETTER"].includes(lockedEvents[0].reconciliation_status)
+    )
+      return null;
     const event = await tx.emailEvent.findUniqueOrThrow({ where: { id: eventId } });
     const recipientMatch = event.campaignRecipientId
       ? await tx.campaignRecipient.findUnique({ where: { id: event.campaignRecipientId } })
@@ -64,12 +69,50 @@ export async function processWebhookEvent(eventId: string): Promise<void> {
           })
         : null;
     if (!recipientMatch) {
+      const retryDelaysMs = [30_000, 120_000, 600_000, 1_800_000, 7_200_000];
+      const attempt = event.reconciliationAttempts + 1;
+      const delayMs = retryDelaysMs[attempt - 1];
+      if (delayMs === undefined) {
+        await tx.emailEvent.update({
+          where: { id: event.id },
+          data: {
+            reconciliationStatus: "DEAD_LETTER",
+            reconciliationAttempts: attempt,
+            nextReconcileAt: null,
+            deadLetteredAt: new Date(),
+            processedAt: new Date(),
+            processingError: "orphan: no campaign recipient matched after reconciliation",
+          },
+        });
+        return null;
+      }
+      const runAt = new Date(Date.now() + delayMs);
       await tx.emailEvent.update({
         where: { id: event.id },
-        data: { processedAt: new Date(), processingError: "orphan: no campaign recipient matched" },
+        data: {
+          reconciliationStatus: "RETRY_PENDING",
+          reconciliationAttempts: attempt,
+          nextReconcileAt: runAt,
+          processingError: "orphan: no campaign recipient matched",
+        },
+      });
+      await tx.job.upsert({
+        where: { uniqueKey: `RECONCILE_WEBHOOK_EVENT/${event.id}/${attempt}` },
+        create: {
+          type: "RECONCILE_WEBHOOK_EVENT",
+          uniqueKey: `RECONCILE_WEBHOOK_EVENT/${event.id}/${attempt}`,
+          payload: { eventId: event.id },
+          runAt,
+          maxAttempts: 3,
+        },
+        update: { runAt, status: "PENDING", completedAt: null, lastError: null },
       });
       return null;
     }
+    await tx.emailEvent.update({
+      where: { id: event.id },
+      data: { reconciliationStatus: "MATCHED", campaignRecipientId: recipientMatch.id },
+    });
     await tx.$queryRaw(
       Prisma.sql`SELECT id FROM campaign_recipients WHERE id = ${recipientMatch.id}::uuid FOR UPDATE`
     );
@@ -205,7 +248,13 @@ export async function processWebhookEvent(eventId: string): Promise<void> {
     }
     await tx.emailEvent.update({
       where: { id: event.id },
-      data: { campaignRecipientId: recipient.id, processedAt: new Date(), processingError: null },
+      data: {
+        campaignRecipientId: recipient.id,
+        reconciliationStatus: "PROCESSED",
+        processedAt: new Date(),
+        nextReconcileAt: null,
+        processingError: null,
+      },
     });
     const immediateStats =
       event.eventType === "email.bounced" || event.eventType === "email.complained";

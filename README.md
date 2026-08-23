@@ -6,6 +6,8 @@ Homix Realty 的房源营销邮件工作台。系统将联系人、房源、受�
 
 - React 管理台：Dashboard、Listings、Contacts/CSV Import、Audiences、Campaign Wizard/详情、Analytics、Settings。
 - Express `/api/v2`：Entra Easy Auth 身份映射、ADMIN/MARKETER/VIEWER RBAC、CSRF、速率限制和 mutation audit。
+- OneKey/BBO：按 MLS 号或地址搜索本地索引，通过 BBO 的合规 listing API 导入/刷新房源、复制媒体，并显式预览/导入最近 12–24 个月同邮编及相邻邮编成交经纪人受众；不存在 Homix/挂牌办公室所有权门禁。
+- AI 辅助：服务端 provider abstraction、结构化输出、只使用 allowlist 房源事实，先保存 proposal，再由用户逐字段 Apply；`AI_PROVIDER=disabled` 不影响手工 Campaign 或投递。
 - Prisma/PostgreSQL：冻结的 content/recipient snapshot、全局 suppression、发送批次/尝试、Webhook inbox、配额预留和 `SKIP LOCKED` durable jobs。
 - Resend：最多 100 封的 batch、同批次稳定 idempotency key、temporary retry、uncertain manual review、signed raw-body Webhook、visible/RFC 8058 unsubscribe。
 - 资产：JPG/PNG/WebP 经过 Sharp 去 EXIF 并生成 1200/600 JPEG；PDF 保留；生产写入 Azure Blob，邮件只引用永久公开 URL。
@@ -18,7 +20,8 @@ Homix Realty 的房源营销邮件工作台。系统将联系人、房源、受�
 ```bash
 npm ci
 cp .env.example .env
-# 将 SESSION_SECRET 改为至少 16 字节的本地随机值
+# 将 SESSION_SECRET 与 UNSUBSCRIBE_SIGNING_SECRET 改为两个不同的本地随机值
+chmod 600 .env
 npm run db:up
 npm run prisma:migrate:deploy
 npm run db:seed
@@ -32,6 +35,19 @@ npm run dev:worker
 ```
 
 默认 `EMAIL_DELIVERY_MODE=disabled`，不会调用外部邮件发送。测试使用 `FakeEmailProvider`，也不会调用 Resend。Compose 默认把 PostgreSQL 映射到 `localhost:5434`，可用 `POSTGRES_PORT` 覆盖。
+
+OneKey 与 AI 同样默认禁用，不需要外部凭据即可启动。开发验收可设置 `ONEKEY_PROVIDER=fake` 和 `AI_PROVIDER=fake`。生产使用 `ONEKEY_PROVIDER=bbo`，由 BBO 提供 OneKey listing/媒体/收件人数据；BBO key 必须仅授予 `marketing:read` 与读取 listing/events 所需的最小 scope。
+
+## Quick Start: Send a New Listing Campaign
+
+1. 在 Listings 或 Campaign Wizard 中按 MLS 号/地址搜索 OneKey。
+2. 选择结果并导入或复用已有 marketing listing。
+3. 对照 source facts 审核内容；需要时生成 AI proposal，勾选字段后 Apply。
+4. 预览 BBO 返回的同邮编/相邻邮编成交经纪人，确认后导入 saved audience，或选择已有受众。
+5. 选择 sender profile 和 Reply-To agent。
+6. 生成并人工选择 AI Campaign subject/preheader/intro/CTA，预览并发送 test。
+7. Mark ready 后 snapshot、schedule/send；快照不随 OneKey 后续刷新而改变。
+8. 在 Campaign/Analytics 监控 accepted、delivered、bounce、complaint、manual review 与 suppression。
 
 ## 运行角色
 
@@ -74,6 +90,8 @@ Coverage 分为快速 unit/domain 门禁与 PostgreSQL service 门禁；Campaign
 
 - 新环境、seed 后和数据库恢复后均为全局暂停；管理员完成 reconciliation 并记录原因后才能恢复。
 - `disabled` 禁止外发；`sandbox` 只允许 `EMAIL_TEST_ALLOWLIST`；`live` 在每次 snapshot/send 时重新验证 sender、地址、URL、测试发送和系统 readiness。
+- 可见 unsubscribe 与 RFC 8058 one-click 使用独立签名 secret，并支持有明确到期时间的 previous secret 重叠轮换。
+- Webhook 无法匹配 recipient 时按 30 秒、2 分、10 分、30 分、2 小时重试，之后进入可见 dead letter；uncertain batch 只能通过审计化 manual-review 操作处理。
 - 生产拒绝 local auth、`DEV_BYPASS_AUTH`、非 TLS PostgreSQL 和 local storage；live delivery 另行拒绝占位公司地址与 localhost `BASE_URL`。
 - Key Vault reference 承载 secret；代码、Bicep 参数示例、前端 bundle 和日志不包含真实值。
 - 公共路由只包括 health、Resend Webhook、unsubscribe 与本地资产；`/api/v2/*` 始终在应用层再做身份和角色校验。

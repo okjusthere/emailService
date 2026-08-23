@@ -12,6 +12,7 @@ const appEnv = {
   AUTH_MODE: "local",
   LOCAL_ADMIN_EMAIL: "admin@homixny.com",
   SESSION_SECRET: "playwright-session-secret-at-least-sixteen-bytes",
+  UNSUBSCRIBE_SIGNING_SECRET: "playwright-unsubscribe-secret-at-least-thirty-two-bytes",
   EMAIL_PROVIDER: "fake",
   EMAIL_DELIVERY_MODE: "sandbox",
   EMAIL_TEST_ALLOWLIST: "admin@homixny.com,e2e-recipient@homixny.com",
@@ -22,6 +23,8 @@ const appEnv = {
   COMPANY_POSTAL_ADDRESS: "123 Main Street, Huntington, NY 11743",
   COMPANY_WEBSITE: "https://homixny.com",
   WORKER_POLL_INTERVAL_MS: "250",
+  ONEKEY_PROVIDER: "fake",
+  AI_PROVIDER: "fake",
   LOG_LEVEL: "warn",
 };
 

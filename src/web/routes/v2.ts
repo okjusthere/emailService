@@ -35,11 +35,31 @@ import {
 } from "../../modules/contacts/service.js";
 import { createListing, listListings, updateListing } from "../../modules/listings/service.js";
 import {
+  listManualReviewBatches,
+  manualReviewActions,
+  resolveManualReview,
+} from "../../modules/delivery/manualReview.js";
+import {
   previewContactImport,
   queueContactImport,
   validateContactImport,
 } from "../../modules/imports/service.js";
 import { upsertSuppression } from "../../modules/suppressions/domain.js";
+import {
+  getOneKeyListingReview,
+  importOneKeyListing,
+  importOneKeyRecipients,
+  previewOneKeyRecipients,
+  refreshOneKeyListing,
+  searchOneKeyListings,
+} from "../../modules/onekey/service.js";
+import { getOneKeyProvider } from "../../integrations/onekey/index.js";
+import {
+  applyCampaignCopy,
+  applyListingCopy,
+  generateCampaignCopy,
+  generateListingCopy,
+} from "../../modules/ai/service.js";
 import { DomainError } from "../../shared/errors.js";
 import { escapeCsvCell, normalizeEmail, normalizeName } from "../../shared/normalize.js";
 import {
@@ -62,6 +82,13 @@ const upload = multer({
 const uploadLimit = rateLimit({
   windowMs: 60 * 60_000,
   limit: 20,
+  keyGenerator: (req) => req.user?.id ?? "unauthenticated",
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+const aiLimit = rateLimit({
+  windowMs: 60 * 60_000,
+  limit: config.aiRateLimitPerHour,
   keyGenerator: (req) => req.user?.id ?? "unauthenticated",
   standardHeaders: true,
   legacyHeaders: false,
@@ -97,6 +124,160 @@ async function writeResponseChunk(res: Response, chunk: string): Promise<boolean
 router.get("/auth/me", (req, res) => {
   res.json({ user: req.user });
 });
+
+const oneKeyRecipientSchema = z.object({
+  nearbyZipCount: z.coerce.number().int().min(0).max(5).default(3),
+  closedMonths: z.coerce.number().int().min(12).max(24).default(12),
+  limit: z.coerce.number().int().min(1).max(5000).default(2000),
+});
+const aiToneSchema = z.enum(["professional", "warm", "concise", "luxury"]);
+
+router.get("/ai/status", (_req, res) => {
+  res.json({
+    enabled: config.aiProvider !== "disabled",
+    provider: config.aiProvider,
+    model: config.openAiModel,
+  });
+});
+router.post(
+  "/listings/:id/ai/generate",
+  requireRole("ADMIN", "MARKETER"),
+  aiLimit,
+  async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const { tone } = z.object({ tone: aiToneSchema.default("professional") }).parse(req.body);
+    res.json(await generateListingCopy(id, tone, actorFromRequest(req)));
+  }
+);
+router.post("/listings/:id/ai/apply", requireRole("ADMIN", "MARKETER"), async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  const input = z
+    .object({
+      generationId: z.uuid(),
+      fields: z
+        .array(z.enum(["title", "shortDescription", "longDescription", "highlights"]))
+        .min(1),
+    })
+    .parse(req.body);
+  res.json(await applyListingCopy(id, input.generationId, input.fields, actorFromRequest(req)));
+});
+router.post(
+  "/campaigns/:id/ai/generate",
+  requireRole("ADMIN", "MARKETER"),
+  aiLimit,
+  async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const { tone } = z.object({ tone: aiToneSchema.default("professional") }).parse(req.body);
+    res.json(await generateCampaignCopy(id, tone, actorFromRequest(req)));
+  }
+);
+router.post("/campaigns/:id/ai/apply", requireRole("ADMIN", "MARKETER"), async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  const input = z
+    .object({
+      generationId: z.uuid(),
+      variantIndex: z.number().int().min(0).max(2),
+      fields: z.array(z.enum(["subject", "preheader", "introText", "ctaLabel"])).min(1),
+    })
+    .parse(req.body);
+  res.json(
+    await applyCampaignCopy(
+      id,
+      input.generationId,
+      input.variantIndex,
+      input.fields,
+      actorFromRequest(req)
+    )
+  );
+});
+
+router.get("/onekey/status", requireRole("ADMIN"), async (_req, res) => {
+  const [cursor, indexed, imported] = await Promise.all([
+    prisma.externalSyncCursor.findFirst({ orderBy: { updatedAt: "desc" } }),
+    prisma.oneKeyListingIndex.count(),
+    prisma.listing.count({ where: { source: "ONEKEY" } }),
+  ]);
+  res.json({
+    provider: config.oneKeyProvider,
+    enabled: config.oneKeyProvider !== "disabled",
+    syncEnabled: config.oneKeySyncEnabled,
+    indexed,
+    imported,
+    cursor,
+  });
+});
+router.post("/onekey/test", requireRole("ADMIN"), async (_req, res) => {
+  res.json(await getOneKeyProvider().testConnection());
+});
+router.post("/onekey/sync/:kind", requireRole("ADMIN"), async (req, res) => {
+  const kind = z.enum(["initial", "delta", "rebuild"]).parse(req.params.kind);
+  const type = kind === "delta" ? "ONEKEY_DELTA_SYNC" : "ONEKEY_INITIAL_SYNC";
+  const bucket = new Date().toISOString().slice(0, 13);
+  const job = await prisma.job.upsert({
+    where: { uniqueKey: `${type}/${bucket}` },
+    create: { type, uniqueKey: `${type}/${bucket}`, payload: { requestedBy: req.user!.id, kind } },
+    update: { status: "PENDING", runAt: new Date(), attempts: 0, lastError: null },
+  });
+  res.status(202).json(job);
+});
+router.get("/onekey/listings/search", async (req, res) => {
+  const query = z
+    .object({
+      q: z.string().trim().min(2).max(200),
+      limit: z.coerce.number().int().min(1).max(50).default(20),
+    })
+    .parse(req.query);
+  res.json(await searchOneKeyListings(query.q, query.limit));
+});
+router.get("/onekey/listings/:sourceKey", async (req, res) => {
+  const sourceKey = z.string().trim().min(1).max(255).parse(req.params.sourceKey);
+  res.json(await getOneKeyListingReview(sourceKey));
+});
+router.post(
+  "/onekey/listings/:sourceKey/import",
+  requireRole("ADMIN", "MARKETER"),
+  async (req, res) => {
+    const sourceKey = z.string().trim().min(1).max(255).parse(req.params.sourceKey);
+    const { agentId } = z.object({ agentId: z.uuid() }).parse(req.body);
+    const result = await importOneKeyListing(sourceKey, agentId, actorFromRequest(req));
+    res.status(result.created ? 201 : 200).json(result);
+  }
+);
+router.post("/listings/:id/onekey/refresh", requireRole("ADMIN", "MARKETER"), async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  res.json(await refreshOneKeyListing(id, actorFromRequest(req)));
+});
+router.post(
+  "/listings/:id/onekey/media/retry",
+  requireRole("ADMIN", "MARKETER"),
+  async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const job = await prisma.job.create({
+      data: {
+        type: "ONEKEY_MEDIA_IMPORT",
+        uniqueKey: `ONEKEY_MEDIA_IMPORT/${id}/retry/${randomUUID()}`,
+        payload: { listingId: id },
+        maxAttempts: 5,
+      },
+    });
+    res.status(202).json(job);
+  }
+);
+router.get("/onekey/listings/:sourceKey/recipients", async (req, res) => {
+  const sourceKey = z.string().trim().min(1).max(255).parse(req.params.sourceKey);
+  res.json(await previewOneKeyRecipients(sourceKey, oneKeyRecipientSchema.parse(req.query)));
+});
+router.post(
+  "/listings/:id/onekey/recipients/import",
+  requireRole("ADMIN", "MARKETER"),
+  async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const input = oneKeyRecipientSchema
+      .extend({ audienceName: z.string().trim().min(1).max(200).optional() })
+      .parse(req.body);
+    res.status(201).json(await importOneKeyRecipients(id, input, actorFromRequest(req)));
+  }
+);
 router.post("/auth/logout", (_req, res) => {
   res.clearCookie("homix_session", {
     httpOnly: true,
@@ -741,12 +922,22 @@ router.post("/listings/:id/duplicate", requireRole("ADMIN", "MARKETER"), async (
     updatedAt: _updated,
     publishedAt: _published,
     facts,
+    sourceSnapshot: _sourceSnapshot,
+    sourceWarnings: _sourceWarnings,
+    sourceKey: _sourceKey,
+    sourceListingId: _sourceListingId,
+    sourceSystem: _sourceSystem,
+    sourceModifiedAt: _sourceModifiedAt,
+    sourceSyncedAt: _sourceSyncedAt,
+    sourceSyncStatus: _sourceSyncStatus,
+    source: _source,
     ...copy
   } = source;
   const duplicate = await prisma.listing.create({
     data: {
       ...copy,
       facts: facts === null ? Prisma.JsonNull : (facts as Prisma.InputJsonValue),
+      source: "MANUAL",
       slug: `${slug}-copy-${Date.now()}`,
       internalName: `${copy.internalName} (Copy)`,
       title: `${copy.title} (Copy)`,
@@ -906,9 +1097,12 @@ const senderSchema = z.object({
   sendWindowEnd: z.string().regex(/^\d{2}:\d{2}$/),
   allowedWeekdays: z.array(z.number().int().min(0).max(6)).min(1),
   warmupEnabled: z.boolean().optional(),
+  warmupStartDate: z.coerce.date().nullable().optional(),
   warmupSchedule: z
     .array(z.object({ day: z.number().int().positive(), limit: z.number().int().positive() }))
     .optional(),
+  openTrackingEnabled: z.boolean().optional(),
+  clickTrackingEnabled: z.boolean().optional(),
   isActive: z.boolean().optional(),
   isDefault: z.boolean().optional(),
 });
@@ -978,9 +1172,49 @@ router.post("/sender-profiles/:id/verify", requireRole("ADMIN"), async (req, res
 });
 router.post("/sender-profiles/:id/suspend", requireRole("ADMIN"), async (req, res) => {
   const { id } = idParam.parse(req.params);
-  res.json(
-    await prisma.senderProfile.update({ where: { id }, data: { verificationStatus: "SUSPENDED" } })
+  z.object({ confirmation: z.literal("SUSPEND_SENDER"), reason: z.string().min(5).max(500) }).parse(
+    req.body
   );
+  res.json(
+    await prisma.senderProfile.update({
+      where: { id },
+      data: { verificationStatus: "SUSPENDED", isActive: false },
+    })
+  );
+});
+router.post("/sender-profiles/:id/reactivate", requireRole("ADMIN"), async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  z.object({ confirmation: z.literal("REACTIVATE_SENDER") }).parse(req.body);
+  res.json(
+    await prisma.senderProfile.update({
+      where: { id },
+      data: { verificationStatus: "VERIFIED", isActive: true, verifiedAt: new Date() },
+    })
+  );
+});
+router.post("/sender-profiles/:id/default", requireRole("ADMIN"), async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  z.object({ confirmation: z.literal("SET_DEFAULT_SENDER") }).parse(req.body);
+  res.json(
+    await inTransaction(async (tx) => {
+      await tx.senderProfile.updateMany({ where: { id: { not: id } }, data: { isDefault: false } });
+      return tx.senderProfile.update({ where: { id }, data: { isDefault: true } });
+    })
+  );
+});
+router.delete("/sender-profiles/:id", requireRole("ADMIN"), async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  const confirmation = z.literal("DELETE_UNREFERENCED_SENDER").parse(req.query.confirmation);
+  void confirmation;
+  const campaigns = await prisma.campaign.count({ where: { senderProfileId: id } });
+  if (campaigns)
+    throw new DomainError(
+      "SENDER_IN_USE",
+      "Sender profiles used by campaigns cannot be deleted; suspend them instead.",
+      409
+    );
+  await prisma.senderProfile.delete({ where: { id } });
+  res.status(204).end();
 });
 router.get("/sender-profiles/:id/quota", async (req, res) => {
   const { id } = idParam.parse(req.params);
@@ -991,6 +1225,46 @@ router.get("/sender-profiles/:id/quota", async (req, res) => {
     take: 7,
   });
   res.json({ dailyLimit: sender.dailyLimit, usage });
+});
+
+router.get("/operations/manual-review", requireRole("ADMIN"), async (_req, res) => {
+  res.json({ items: await listManualReviewBatches() });
+});
+router.post("/operations/manual-review/:id/resolve", requireRole("ADMIN"), async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  const input = z
+    .object({
+      action: z.enum(manualReviewActions),
+      confirmation: z.enum(manualReviewActions),
+      reason: z.string().trim().min(5).max(500),
+      providerEmailId: z.string().trim().min(3).max(300).optional(),
+      recipientId: z.uuid().optional(),
+    })
+    .refine((value) => value.action === value.confirmation, {
+      path: ["confirmation"],
+      message: "Confirmation must exactly match the action",
+    })
+    .parse(req.body);
+  res.json(await resolveManualReview(id, input, actorFromRequest(req)));
+});
+
+router.get("/operations/webhooks", requireRole("ADMIN"), async (req, res) => {
+  const query = z
+    .object({
+      status: z
+        .enum(["RECEIVED", "MATCHED", "RETRY_PENDING", "PROCESSED", "DEAD_LETTER"])
+        .optional(),
+      limit: z.coerce.number().int().min(1).max(200).default(100),
+    })
+    .parse(req.query);
+  const items = await prisma.emailEvent.findMany({
+    where: query.status
+      ? { reconciliationStatus: query.status }
+      : { reconciliationStatus: { in: ["RECEIVED", "RETRY_PENDING", "DEAD_LETTER"] } },
+    orderBy: { createdAt: "desc" },
+    take: query.limit,
+  });
+  res.json({ items });
 });
 
 router.get("/campaigns", async (req, res) => {
@@ -1063,7 +1337,15 @@ router.post("/campaigns/:id/preview", async (req, res) => {
 router.post("/campaigns/:id/test-send", requireRole("ADMIN", "MARKETER"), async (req, res) => {
   const { id } = idParam.parse(req.params);
   const input = testSendSchema.parse(req.body);
-  res.json(await testSendCampaign(id, input.email, input.version, actorFromRequest(req)));
+  res.json(
+    await testSendCampaign(
+      id,
+      input.email,
+      input.version,
+      input.clientRequestId,
+      actorFromRequest(req)
+    )
+  );
 });
 router.post("/campaigns/:id/mark-ready", requireRole("ADMIN", "MARKETER"), async (req, res) => {
   const { id } = idParam.parse(req.params);

@@ -3,7 +3,7 @@
 ## Trust boundaries
 
 - Azure Easy Auth is the production identity perimeter, but application middleware still resolves a database user and enforces RBAC. Browser-supplied role headers are never trusted.
-- Production startup rejects `AUTH_MODE=local`, `DEV_BYPASS_AUTH=true`, non-TLS PostgreSQL, local asset storage, missing provider configuration for Worker sandbox/live, localhost live URLs and placeholder postal address.
+- Production startup rejects `AUTH_MODE=local`, `DEV_BYPASS_AUTH=true`, non-TLS PostgreSQL, local asset storage, placeholder unsubscribe secrets, incomplete enabled BBO/OpenAI configuration, missing provider configuration for Worker sandbox/live, localhost live URLs and placeholder postal address.
 - Web, Worker and Migration are separate processes with the same non-root image. Only Worker may call the email provider; only Migration runs schema deploy.
 - Key Vault references and a user-assigned managed identity supply database/provider secrets. Storage uploads use `DefaultAzureCredential`; shared keys are disabled.
 
@@ -20,7 +20,15 @@ Rich email content and agent signatures pass an allowlist sanitizer. Preview use
 - Live requires verified sender and readiness confirmations. Suppression is global and rechecked immediately before submit.
 - Batch attempts are recorded before provider calls. Stable, non-PII HMAC-derived idempotency keys prevent unsafe duplicate retry; uncertain outcomes stop for manual reconciliation.
 - Unsubscribe tokens are signed, non-guessable bearer values; only their SHA-256 hash is stored on the recipient. Visible GET is non-mutating, one-click POST is idempotent.
+- Unsubscribe signing is independent of session signing. Verification tries the current secret, then a previous secret only until its configured expiry.
 - Complaint/hard-bounce/provider suppression has stronger persistence than later engagement events.
+- Unmatched Webhooks remain durable and retry on a bounded schedule before dead letter. Uncertain provider submissions require reasoned, audited manual-review actions; safe retry reuses the original provider idempotency window.
+
+## MLS and AI boundaries
+
+OneKey data enters through a server-only provider adapter. The browser never receives the BBO bearer key or MLS Grid token. BBO keys should be dedicated to Homix Marketing and scoped to the read-only listing, event and marketing-recipient routes. Provider errors are sanitized, searches/limits are bounded, and remote media is copied only from the configured provider origin, size-checked, decoded by Sharp and stored under Homix control.
+
+AI receives only an allowlist of listing facts and current marketing fields—never contacts, recipient lists, auth headers or secrets. MLS remarks are explicitly treated as untrusted data, not instructions. The OpenAI adapter uses server-side structured output; persisted proposals do not overwrite content until a human selects fields and applies them. Generated intro text is HTML-escaped before sanitization. `AI_PROVIDER=disabled` leaves the manual campaign/send path intact.
 
 ## Data exposure and retention
 
@@ -32,9 +40,9 @@ The initial Azure template uses the PostgreSQL administrator for both pooled run
 
 ## Secret handling and rotation
 
-`.env` and `*.local.bicepparam` are ignored. `.env.example` contains placeholders only. GitHub deployment uses OIDC; the Entra app credential used by Easy Auth, where required, is independently stored in Key Vault. Security CI runs npm high-severity audit, license policy, Gitleaks history scan, CodeQL and Trivy HIGH/CRITICAL image scanning.
+`.env` and `*.local.bicepparam` are ignored. `.env.example` contains placeholders only. The source-archive build starts from `git ls-files`, rejects `.env`/secret-like artifacts and CI scans both repository history and the built archive. GitHub deployment uses OIDC; the Entra app credential used by Easy Auth, where required, is independently stored in Key Vault. Security CI runs npm high-severity audit, license policy, Gitleaks history scan, CodeQL and Trivy HIGH/CRITICAL image scanning.
 
-Rotate Resend API/Webhook and Entra credentials per `OPERATIONS_RUNBOOK.md`. The Webhook adapter supports a current plus time-limited previous secret. If any historic `.env` or provider key may have been shared, rotate at the source; deleting a local file is not sufficient.
+Rotate Resend API/Webhook, unsubscribe signing, BBO, OpenAI and Entra credentials per `OPERATIONS_RUNBOOK.md`. Webhook and unsubscribe adapters support independent current plus time-limited previous secrets. If any historic `.env` or provider key may have been shared, rotate at the source; deleting a local file is not sufficient.
 
 ## Verification checklist
 

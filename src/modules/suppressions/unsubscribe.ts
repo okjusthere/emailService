@@ -1,11 +1,19 @@
 import { config } from "../../config/index.js";
 import { prisma } from "../../db/prisma.js";
-import { hashUnsubscribeToken, verifyUnsubscribeToken } from "../../email/compliance.js";
+import {
+  hashUnsubscribeToken,
+  verifyUnsubscribeTokenWithRotation,
+} from "../../email/compliance.js";
 import { DomainError } from "../../shared/errors.js";
 import { upsertSuppression } from "./domain.js";
 
 export async function unsubscribeByToken(token: string, source: "VISIBLE_LINK" | "ONE_CLICK") {
-  const recipientId = verifyUnsubscribeToken(token, config.sessionSecret);
+  const recipientId = verifyUnsubscribeTokenWithRotation(
+    token,
+    config.unsubscribeSigningSecret,
+    config.unsubscribePreviousSigningSecret,
+    config.unsubscribePreviousSigningSecretExpiresAt
+  );
   if (!recipientId)
     throw new DomainError("UNSUBSCRIBE_TOKEN_INVALID", "The unsubscribe link is invalid.", 400);
   return prisma.$transaction(async (tx) => {

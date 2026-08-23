@@ -37,6 +37,12 @@ Check Settings readiness `workerHeartbeat`, PostgreSQL connectivity, locked jobs
 
 Within Resend's supported idempotency window, a temporary failure retries the same `send_batches.idempotency_key`. A timeout that may have occurred after submit moves to `MANUAL_REVIEW` and is never automatically sent under a new key. Compare batch request hash, attempt time, recorded provider IDs and Resend dashboard. Resolve recipients individually only with evidence; there is no “resend all uncertain” control.
 
+Settings → Manual review exposes `MARK_ACCEPTED`, `MARK_NOT_SENT`, `ATTACH_PROVIDER_ID`, `SAFE_RETRY`, `RELEASE_QUOTA` and `KEEP_IN_REVIEW`. Every action requires a reason, locks the batch, adjusts reserved/accepted/released quota atomically where applicable and writes both a resolution row and audit event. Attach a provider ID only to the exact recipient confirmed in Resend. Use safe retry only before the original idempotency expiry.
+
+## Webhook reconciliation
+
+An unmatched signed Webhook is not marked complete. Worker retries after 30 seconds, 2 minutes, 10 minutes, 30 minutes and 2 hours, which allows a delayed provider ID commit to become visible. After the final miss it becomes `DEAD_LETTER`. Settings → Webhooks shows pending/dead-letter events and attempts. Investigate provider ID, recipient creation and event timing; never edit the payload or invent a recipient link. Replay processing only after the missing local record is repaired.
+
 ## API key rotation
 
 1. Create a new Resend API key.
@@ -49,6 +55,27 @@ Within Resend's supported idempotency window, a temporary failure retries the sa
 ## Webhook secret rotation
 
 Write the new current value as `resend-webhook-secret` and the old value as `resend-webhook-previous-secret` with `scripts/set-key-vault-secret.sh`. Deploy with `USE_PREVIOUS_RESEND_WEBHOOK_SECRET=true` and an ISO expiry in `RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT`, update Resend, replay a signed test, wait for the overlap to expire, then set the flag false and deploy again. Webhook IDs remain deduplicated throughout.
+
+## Unsubscribe signing-secret rotation
+
+Unsubscribe tokens do not use the session secret. Copy the old current value to `unsubscribe-previous-signing-secret`, install a new random `unsubscribe-signing-secret`, and deploy with `USE_PREVIOUS_UNSUBSCRIBE_SIGNING_SECRET=true` and a reviewed ISO expiry. Verify both an old visible link and a new one, then disable/remove the previous reference after expiry. Never rotate by changing `SESSION_SECRET`, and never leave the previous expiry unset.
+
+## OneKey/BBO operations
+
+Keep `EMAIL_DELIVERY_MODE=disabled` while enabling `ONEKEY_PROVIDER=bbo`. Install a dedicated BBO bearer key in `bbo-marketing-api-key`, configure the HTTPS base URL and enable its Key Vault reference. In Settings:
+
+1. Test Connection.
+2. Run initial sync and wait for the cursor success/count.
+3. Search the fixture/approved listing by MLS number and address.
+4. Import it, retry media if needed and verify assets are Homix-hosted.
+5. Refresh and confirm user marketing overrides remain unchanged.
+6. Preview recipient candidates before explicit import. Confirm the policy is last 12–24 months Closed, listing and buyer sides deduplicated, active agents with valid email, Homix office excluded, same ZIP plus 0–5 nearest configured ZIPs.
+
+Provider outage degrades only the integration; it does not make the application unready. Leave sync disabled if the BBO key/scope or licensed data path is not confirmed. Rotate the BBO key by installing a new Key Vault version, deploying/testing, then revoking the old key.
+
+## AI operations
+
+Create a dedicated Homix Marketing OpenAI project/key and store it as `openai-api-key`. While delivery remains disabled, set `AI_PROVIDER=openai`, enable the Key Vault reference and test at least two imported listings. Review facts versus proposal, apply only selected fields, and simulate provider failure to confirm manual editing/sending still works. Rotate by publishing a new Key Vault version, deploying/testing generation, then revoking the old key. AI errors must never trigger delivery retries or block a manual Campaign.
 
 ## Complaint or bounce spike
 

@@ -20,6 +20,9 @@ const testEnv = {
   LOCAL_ASSET_DIR: "./data/test-assets",
   PUBLIC_ASSET_BASE_URL: "http://localhost:3000/public/assets",
   COMPANY_POSTAL_ADDRESS: "123 Main Street, Huntington, NY 11743",
+  UNSUBSCRIBE_SIGNING_SECRET: "test-unsubscribe-secret-at-least-thirty-two-bytes",
+  ONEKEY_PROVIDER: "fake",
+  AI_PROVIDER: "fake",
 };
 
 export default defineConfig({

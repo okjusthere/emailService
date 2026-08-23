@@ -22,8 +22,8 @@ export const audienceFilterSchema = z
     excludeTagIds: z.array(uuidSchema).max(100).optional(),
     engagedWithinDays: z.number().int().min(1).max(3650).nullable().optional(),
     createdAfter: z.iso.datetime().nullable().optional(),
-    includeContactIds: z.array(uuidSchema).max(1000).optional(),
-    excludeContactIds: z.array(uuidSchema).max(1000).optional(),
+    includeContactIds: z.array(uuidSchema).max(5000).optional(),
+    excludeContactIds: z.array(uuidSchema).max(5000).optional(),
     excludePreviouslySentListing: z.boolean().optional(),
     requireKnownPermissionBasis: z.boolean().default(true),
   })

@@ -20,11 +20,17 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - run: npm ci
+      - run: npm run source:archive:check
       - run: npm audit --audit-level=high
       - run: npm run licenses:check > license-report.json
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Scan the deployable tracked-file archive
+        run: |
+          mkdir -p archive-scan
+          git archive HEAD | tar -x -C archive-scan
+          docker run --rm -v "$PWD/archive-scan:/repo" zricethezav/gitleaks:v8.28.0 detect --source=/repo --no-git --redact --exit-code=1
       - uses: actions/upload-artifact@v4
         with: { name: production-license-report, path: license-report.json }
 

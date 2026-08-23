@@ -397,6 +397,12 @@ type Listing = {
     sortOrder: number;
   }>;
   _count: { campaigns: number };
+  source?: "MANUAL" | "ONEKEY";
+  sourceKey?: string;
+  sourceListingId?: string;
+  sourceSyncStatus?: string;
+  sourceWarnings?: Record<string, unknown>;
+  facts?: Record<string, unknown>;
 };
 function Listings() {
   const client = useQueryClient();
@@ -673,6 +679,10 @@ function Listings() {
           </button>
         </form>
       ) : null}
+      <OneKeyImportPanel
+        agents={agents.data?.items ?? []}
+        onImported={() => void client.invalidateQueries({ queryKey: ["listings"] })}
+      />
       <section className="panel toolbar">
         <input
           className="search"
@@ -790,6 +800,7 @@ function Listings() {
                       </button>
                     ) : null}
                   </div>
+                  {listing.source === "ONEKEY" ? <OneKeyListingTools listing={listing} /> : null}
                   <form
                     className="form-grid listing-inline-editor"
                     onSubmit={(event) => {
@@ -1030,6 +1041,311 @@ function Listings() {
         </EmptyState>
       )}
     </Page>
+  );
+}
+
+type OneKeySearchItem = {
+  sourceKey: string;
+  listingId?: string;
+  unparsedAddress: string;
+  city: string;
+  stateCode: string;
+  postalCode: string;
+  standardStatus?: string;
+  propertySubType?: string;
+  listPrice?: string;
+  importedListingId?: string;
+};
+
+function OneKeyImportPanel({
+  agents,
+  onImported,
+  compact = false,
+}: {
+  agents: Array<{ id: string; displayName: string }>;
+  onImported: (listingId: string) => void;
+  compact?: boolean;
+}) {
+  const [query, setQuery] = useState("");
+  const [agentId, setAgentId] = useState("");
+  const searchOneKey = useMutation({
+    mutationFn: () =>
+      api<{ items: OneKeySearchItem[]; source: string }>(
+        `/api/v2/onekey/listings/search?${new URLSearchParams({ q: query, limit: "20" })}`
+      ),
+  });
+  const importListing = useMutation({
+    mutationFn: (sourceKey: string) =>
+      api<{ listing: { id: string }; created: boolean }>(
+        `/api/v2/onekey/listings/${encodeURIComponent(sourceKey)}/import`,
+        { method: "POST", body: JSON.stringify({ agentId }) }
+      ),
+    onSuccess: (result) => onImported(result.listing.id),
+  });
+  useEffect(() => {
+    if (!agentId && agents[0]) setAgentId(agents[0].id);
+  }, [agentId, agents]);
+  return (
+    <section className={compact ? "notice onekey-panel compact" : "panel onekey-panel"}>
+      <div className="panel-head">
+        <div>
+          <span className="eyebrow">OneKey MLS · via BBO</span>
+          <h2>Find by MLS number or address</h2>
+        </div>
+        <span>Any compliant OneKey listing can be imported; no Homix ownership gate.</span>
+      </div>
+      <form
+        className="toolbar"
+        onSubmit={(event) => {
+          event.preventDefault();
+          searchOneKey.mutate();
+        }}
+      >
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="MLS ID, KEY…, or street address"
+          minLength={2}
+          maxLength={200}
+          required
+        />
+        <select value={agentId} onChange={(event) => setAgentId(event.target.value)} required>
+          <option value="">Assign Homix agent</option>
+          {agents.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.displayName}
+            </option>
+          ))}
+        </select>
+        <button className="button secondary" disabled={searchOneKey.isPending}>
+          {searchOneKey.isPending ? "Searching…" : "Search OneKey"}
+        </button>
+      </form>
+      {searchOneKey.data?.items.map((item) => (
+        <div className="onekey-result" key={item.sourceKey}>
+          <div>
+            <strong>{item.unparsedAddress}</strong>
+            <span>
+              {item.listingId ?? item.sourceKey} · {item.standardStatus ?? "Status unavailable"} ·{" "}
+              {item.propertySubType ?? "Property"}
+            </span>
+          </div>
+          {item.importedListingId ? (
+            <button className="text-button" onClick={() => onImported(item.importedListingId!)}>
+              Reuse imported listing
+            </button>
+          ) : (
+            <button
+              className="text-button"
+              disabled={!agentId || importListing.isPending}
+              onClick={() => importListing.mutate(item.sourceKey)}
+            >
+              Import for marketing review
+            </button>
+          )}
+        </div>
+      ))}
+      {searchOneKey.data && !searchOneKey.data.items.length ? (
+        <p>No matching viewable listing was found.</p>
+      ) : null}
+      {searchOneKey.error || importListing.error ? (
+        <p className="form-error">{(searchOneKey.error ?? importListing.error)?.message}</p>
+      ) : null}
+    </section>
+  );
+}
+
+function OneKeyListingTools({ listing }: { listing: Listing }) {
+  const client = useQueryClient();
+  const [proposal, setProposal] = useState<{
+    generationId: string;
+    proposal: Record<string, unknown>;
+  } | null>(null);
+  const [selectedFields, setSelectedFields] = useState([
+    "title",
+    "shortDescription",
+    "longDescription",
+    "highlights",
+  ]);
+  const aiStatus = useQuery({
+    queryKey: ["ai-status"],
+    queryFn: () => api<{ enabled: boolean; provider: string; model: string }>("/api/v2/ai/status"),
+  });
+  const refresh = useMutation({
+    mutationFn: () =>
+      api(`/api/v2/listings/${listing.id}/onekey/refresh`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ["listings"] }),
+  });
+  const retryMedia = useMutation({
+    mutationFn: () =>
+      api(`/api/v2/listings/${listing.id}/onekey/media/retry`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+  });
+  const recipients = useMutation({
+    mutationFn: () =>
+      api<{
+        count: number;
+        closedMonths: number;
+        nearbyZipCount: number;
+        zipScope: Array<{ postalCode: string }>;
+        recipients: Array<{ email: string; fullName?: string }>;
+      }>(
+        `/api/v2/onekey/listings/${encodeURIComponent(listing.sourceKey!)}/recipients?nearbyZipCount=3&closedMonths=12&limit=2000`
+      ),
+  });
+  const importRecipients = useMutation({
+    mutationFn: () =>
+      api<{ created: number; updated: number; suppressed: number; audience: { name: string } }>(
+        `/api/v2/listings/${listing.id}/onekey/recipients/import`,
+        {
+          method: "POST",
+          body: JSON.stringify({ nearbyZipCount: 3, closedMonths: 12, limit: 2000 }),
+        }
+      ),
+  });
+  const generate = useMutation({
+    mutationFn: () =>
+      api<{ generationId: string; proposal: Record<string, unknown> }>(
+        `/api/v2/listings/${listing.id}/ai/generate`,
+        { method: "POST", body: JSON.stringify({ tone: "professional" }) }
+      ),
+    onSuccess: setProposal,
+  });
+  const apply = useMutation({
+    mutationFn: () =>
+      api(`/api/v2/listings/${listing.id}/ai/apply`, {
+        method: "POST",
+        body: JSON.stringify({ generationId: proposal?.generationId, fields: selectedFields }),
+      }),
+    onSuccess: () => {
+      setProposal(null);
+      void client.invalidateQueries({ queryKey: ["listings"] });
+    },
+  });
+  const toggle = (field: string) =>
+    setSelectedFields((current) =>
+      current.includes(field) ? current.filter((value) => value !== field) : [...current, field]
+    );
+  return (
+    <section className="source-review">
+      <div className="notice">
+        <strong>Source facts · {listing.sourceKey}</strong>
+        <span>
+          Sync {listing.sourceSyncStatus ?? "unknown"}. Source refresh never overwrites marketing
+          title, descriptions, highlights, or campaign content.
+        </span>
+        <div className="toolbar">
+          <button className="text-button" onClick={() => refresh.mutate()}>
+            Refresh source facts
+          </button>
+          <button className="text-button" onClick={() => retryMedia.mutate()}>
+            Retry media copy
+          </button>
+          <button className="text-button" onClick={() => recipients.mutate()}>
+            Preview matched agents
+          </button>
+        </div>
+      </div>
+      {listing.facts ? <pre>{JSON.stringify(listing.facts, null, 2)}</pre> : null}
+      {recipients.data ? (
+        <div className="notice warning">
+          <strong>{recipients.data.count.toLocaleString()} active external agents matched</strong>
+          <span>
+            Last {recipients.data.closedMonths} months Closed · same ZIP plus{" "}
+            {recipients.data.nearbyZipCount} nearest ZIPs (
+            {recipients.data.zipScope.map((zip) => zip.postalCode).join(", ")}). Nothing is sent
+            automatically.
+          </span>
+          <button
+            className="text-button"
+            onClick={() => {
+              if (
+                window.confirm(
+                  "Import these candidates as business contacts and create a saved audience?"
+                )
+              )
+                importRecipients.mutate();
+            }}
+          >
+            Import contacts & saved audience
+          </button>
+        </div>
+      ) : null}
+      {importRecipients.data ? (
+        <p className="success-copy">
+          {importRecipients.data.audience.name}: {importRecipients.data.created} created,{" "}
+          {importRecipients.data.updated} updated, {importRecipients.data.suppressed} already
+          suppressed.
+        </p>
+      ) : null}
+      <div className="notice">
+        <strong>AI marketing proposal</strong>
+        <span>
+          {aiStatus.data?.enabled
+            ? `${aiStatus.data.provider} · ${aiStatus.data.model}. Generation never applies automatically.`
+            : "AI is disabled; deterministic manual editing remains available."}
+        </span>
+        <button
+          className="text-button"
+          disabled={!aiStatus.data?.enabled || generate.isPending}
+          onClick={() => generate.mutate()}
+        >
+          Generate proposal
+        </button>
+      </div>
+      {proposal ? (
+        <div className="proposal-review">
+          {Object.entries(proposal.proposal).map(([field, value]) => (
+            <label className="proposal-row" key={field}>
+              <input
+                type="checkbox"
+                checked={selectedFields.includes(field)}
+                onChange={() => toggle(field)}
+              />
+              <span>
+                <strong>{field}</strong>
+                <small>
+                  Current:{" "}
+                  {JSON.stringify((listing as unknown as Record<string, unknown>)[field] ?? null)}
+                </small>
+                <small>Proposal: {JSON.stringify(value)}</small>
+              </span>
+            </label>
+          ))}
+          <button
+            className="button secondary"
+            disabled={!selectedFields.length}
+            onClick={() => apply.mutate()}
+          >
+            Apply selected fields
+          </button>
+        </div>
+      ) : null}
+      {refresh.error ||
+      retryMedia.error ||
+      recipients.error ||
+      importRecipients.error ||
+      generate.error ||
+      apply.error ? (
+        <p className="form-error">
+          {
+            (
+              refresh.error ??
+              retryMedia.error ??
+              recipients.error ??
+              importRecipients.error ??
+              generate.error ??
+              apply.error
+            )?.message
+          }
+        </p>
+      ) : null}
+    </section>
   );
 }
 
@@ -2446,6 +2762,7 @@ function CampaignDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const [recipientSendState, setRecipientSendState] = useState("");
   const [recipientDeliveryState, setRecipientDeliveryState] = useState("");
   const [testEmail, setTestEmail] = useState("admin@homixny.com");
+  const [testRequestId, setTestRequestId] = useState<string | null>(null);
   const [scheduledAt, setScheduledAt] = useState("");
   const campaign = useQuery({
     queryKey: ["campaign", id],
@@ -2545,12 +2862,22 @@ function CampaignDetail({ id, onClose }: { id: string; onClose: () => void }) {
     },
   });
   const testSend = useMutation({
-    mutationFn: () =>
-      api(`/api/v2/campaigns/${id}/test-send`, {
+    mutationFn: () => {
+      const clientRequestId = testRequestId ?? crypto.randomUUID();
+      if (!testRequestId) setTestRequestId(clientRequestId);
+      return api(`/api/v2/campaigns/${id}/test-send`, {
         method: "POST",
-        body: JSON.stringify({ email: testEmail, version: campaign.data?.version ?? 1 }),
-      }),
-    onSuccess: () => void campaign.refetch(),
+        body: JSON.stringify({
+          email: testEmail,
+          version: campaign.data?.version ?? 1,
+          clientRequestId,
+        }),
+      });
+    },
+    onSuccess: () => {
+      setTestRequestId(null);
+      void campaign.refetch();
+    },
   });
   if (campaign.isLoading)
     return (
@@ -2664,7 +2991,10 @@ function CampaignDetail({ id, onClose }: { id: string; onClose: () => void }) {
           <input
             type="email"
             value={testEmail}
-            onChange={(event) => setTestEmail(event.target.value)}
+            onChange={(event) => {
+              setTestEmail(event.target.value);
+              setTestRequestId(null);
+            }}
             aria-label="Test recipient"
           />
           <button className="text-button" onClick={() => testSend.mutate()}>
@@ -2676,6 +3006,7 @@ function CampaignDetail({ id, onClose }: { id: string; onClose: () => void }) {
               : "Current version not tested"}
           </span>
         </div>
+        <CampaignAiAssistant campaign={item} onApplied={() => void campaign.refetch()} />
         {action.error || testSend.error || duplicate.error ? (
           <p className="form-error">
             {(action.error ?? testSend.error ?? duplicate.error)?.message}
@@ -2832,7 +3163,130 @@ function CampaignDetail({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
+function CampaignAiAssistant({
+  campaign,
+  onApplied,
+}: {
+  campaign: CampaignDetailData;
+  onApplied: () => void;
+}) {
+  const [proposal, setProposal] = useState<{
+    generationId: string;
+    proposal: {
+      variants: Array<{
+        subject: string;
+        preheader: string;
+        introText: string;
+        ctaLabel: string;
+      }>;
+      recommendedIndex: number;
+    };
+  } | null>(null);
+  const [variantIndex, setVariantIndex] = useState(0);
+  const [fields, setFields] = useState(["subject", "preheader", "introText", "ctaLabel"]);
+  const status = useQuery({
+    queryKey: ["ai-status"],
+    queryFn: () => api<{ enabled: boolean; provider: string; model: string }>("/api/v2/ai/status"),
+  });
+  const generate = useMutation({
+    mutationFn: () =>
+      api<NonNullable<typeof proposal>>(`/api/v2/campaigns/${campaign.id}/ai/generate`, {
+        method: "POST",
+        body: JSON.stringify({ tone: "professional" }),
+      }),
+    onSuccess: (result) => {
+      setProposal(result);
+      setVariantIndex(result.proposal.recommendedIndex);
+    },
+  });
+  const apply = useMutation({
+    mutationFn: () =>
+      api(`/api/v2/campaigns/${campaign.id}/ai/apply`, {
+        method: "POST",
+        body: JSON.stringify({
+          generationId: proposal?.generationId,
+          variantIndex,
+          fields,
+        }),
+      }),
+    onSuccess: () => {
+      setProposal(null);
+      onApplied();
+    },
+  });
+  const variant = proposal?.proposal.variants[variantIndex];
+  return (
+    <div className="campaign-ai">
+      <div className="toolbar">
+        <span>
+          AI copy assistant ·{" "}
+          {status.data?.enabled ? `${status.data.provider} (${status.data.model})` : "disabled"}
+        </span>
+        <button
+          className="text-button"
+          disabled={!status.data?.enabled || generate.isPending}
+          onClick={() => generate.mutate()}
+        >
+          Generate 3 variants
+        </button>
+      </div>
+      {proposal ? (
+        <div className="proposal-review">
+          <div className="tabs">
+            {proposal.proposal.variants.map((_, index) => (
+              <button
+                key={index}
+                className={variantIndex === index ? "active" : ""}
+                onClick={() => setVariantIndex(index)}
+              >
+                Variant {index + 1}
+                {proposal.proposal.recommendedIndex === index ? " · Recommended" : ""}
+              </button>
+            ))}
+          </div>
+          {variant
+            ? Object.entries(variant).map(([field, value]) => (
+                <label className="proposal-row" key={field}>
+                  <input
+                    type="checkbox"
+                    checked={fields.includes(field)}
+                    onChange={() =>
+                      setFields((current) =>
+                        current.includes(field)
+                          ? current.filter((item) => item !== field)
+                          : [...current, field]
+                      )
+                    }
+                  />
+                  <span>
+                    <strong>{field}</strong>
+                    <small>
+                      Current:{" "}
+                      {String((campaign as unknown as Record<string, unknown>)[field] ?? "")}
+                    </small>
+                    <small>Proposal: {value}</small>
+                  </span>
+                </label>
+              ))
+            : null}
+          <button
+            className="button secondary"
+            disabled={!fields.length || apply.isPending}
+            onClick={() => apply.mutate()}
+          >
+            Apply selected fields
+          </button>
+        </div>
+      ) : null}
+      {generate.error || apply.error ? (
+        <p className="form-error">{(generate.error ?? apply.error)?.message}</p>
+      ) : null}
+    </div>
+  );
+}
+
 function CampaignWizard({ onCreated }: { onCreated: () => void }) {
+  const queryClient = useQueryClient();
   const [step, setStep] = useState(1);
   const [introHtml, setIntroHtml] = useState(
     "<p>I wanted to share this new opportunity with you.</p>"
@@ -2914,6 +3368,14 @@ function CampaignWizard({ onCreated }: { onCreated: () => void }) {
               Campaign name
               <input value={form.name} onChange={(event) => fields({ name: event.target.value })} />
             </label>
+            <OneKeyImportPanel
+              compact
+              agents={agents.data?.items ?? []}
+              onImported={(listingId) => {
+                fields({ listingId });
+                void queryClient.invalidateQueries({ queryKey: ["listings-options"] });
+              }}
+            />
             <label>
               Active listing
               <select
@@ -3189,6 +3651,21 @@ function Settings({ user }: { user: Me["user"] }) {
           verificationStatus: string;
           dailyLimit: number;
           isDefault: boolean;
+          fromName: string;
+          domain: string;
+          fixedReplyToEmail?: string;
+          batchSize: number;
+          minBatchIntervalSeconds: number;
+          timezone: string;
+          sendWindowStart: string;
+          sendWindowEnd: string;
+          allowedWeekdays: number[];
+          warmupEnabled: boolean;
+          warmupStartDate?: string;
+          warmupSchedule?: Array<{ day: number; limit: number }>;
+          openTrackingEnabled: boolean;
+          clickTrackingEnabled: boolean;
+          isActive: boolean;
         }>
       >("/api/v2/sender-profiles"),
   });
@@ -3225,6 +3702,9 @@ function Settings({ user }: { user: Me["user"] }) {
           sendWindowEnd: "18:00",
           allowedWeekdays: [1, 2, 3, 4, 5],
           warmupEnabled: false,
+          warmupSchedule: [],
+          openTrackingEnabled: form.get("openTrackingEnabled") === "on",
+          clickTrackingEnabled: form.get("clickTrackingEnabled") === "on",
           isDefault: form.get("isDefault") === "on",
         }),
       }),
@@ -3283,6 +3763,7 @@ function Settings({ user }: { user: Me["user"] }) {
                     </span>
                   </div>
                   <StatusPill value={sender.verificationStatus} />
+                  {user.role === "ADMIN" ? <SenderProfileControls sender={sender} /> : null}
                 </div>
               ))}
             </div>
@@ -3332,6 +3813,10 @@ function Settings({ user }: { user: Me["user"] }) {
               </div>
               <label className="check-row">
                 <input name="isDefault" type="checkbox" /> Default sender
+              </label>
+              <label className="check-row">
+                <input name="openTrackingEnabled" type="checkbox" /> Open tracking
+                <input name="clickTrackingEnabled" type="checkbox" /> Click tracking
               </label>
               <button className="text-button" disabled={createSender.isPending}>
                 Create unverified sender
@@ -3426,9 +3911,448 @@ function Settings({ user }: { user: Me["user"] }) {
             <button onClick={() => setSettingsTab("suppressions")}>Suppressions</button>
           </div>
         </article>
+        {user.role === "ADMIN" ? <IntegrationOperations /> : null}
       </section>
       <SettingsResourcePanel tab={settingsTab} admin={user.role === "ADMIN"} />
     </Page>
+  );
+}
+
+type SenderProfileUi = {
+  id: string;
+  name: string;
+  fromName: string;
+  fromEmail: string;
+  domain: string;
+  fixedReplyToEmail?: string;
+  verificationStatus: string;
+  dailyLimit: number;
+  batchSize: number;
+  minBatchIntervalSeconds: number;
+  timezone: string;
+  sendWindowStart: string;
+  sendWindowEnd: string;
+  allowedWeekdays: number[];
+  warmupEnabled: boolean;
+  warmupStartDate?: string;
+  warmupSchedule?: Array<{ day: number; limit: number }>;
+  openTrackingEnabled: boolean;
+  clickTrackingEnabled: boolean;
+  isDefault: boolean;
+  isActive: boolean;
+};
+
+function SenderProfileControls({ sender }: { sender: SenderProfileUi }) {
+  const client = useQueryClient();
+  const quota = useQuery({
+    queryKey: ["sender-quota", sender.id],
+    queryFn: () =>
+      api<{
+        dailyLimit: number;
+        usage: Array<{
+          localDate: string;
+          reservedCount: number;
+          acceptedCount: number;
+          releasedCount: number;
+        }>;
+      }>(`/api/v2/sender-profiles/${sender.id}/quota`),
+  });
+  const action = useMutation({
+    mutationFn: async (input: {
+      action: string;
+      body?: Record<string, unknown>;
+      method?: string;
+    }) => {
+      if (input.action === "delete")
+        return api(`/api/v2/sender-profiles/${sender.id}?confirmation=DELETE_UNREFERENCED_SENDER`, {
+          method: "DELETE",
+        });
+      return api(`/api/v2/sender-profiles/${sender.id}/${input.action}`, {
+        method: input.method ?? "POST",
+        body: JSON.stringify(input.body ?? {}),
+      });
+    },
+    onSuccess: () => void client.invalidateQueries({ queryKey: ["senders"] }),
+  });
+  return (
+    <details className="sender-controls">
+      <summary>Configure sender</summary>
+      <form
+        className="form-grid listing-inline-editor"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          let warmupSchedule: Array<{ day: number; limit: number }> = [];
+          try {
+            warmupSchedule = JSON.parse(String(form.get("warmupSchedule") || "[]"));
+          } catch {
+            window.alert("Warmup schedule must be valid JSON.");
+            return;
+          }
+          action.mutate({
+            action: "",
+            method: "PATCH",
+            body: {
+              name: form.get("name"),
+              fromName: form.get("fromName"),
+              fromEmail: form.get("fromEmail"),
+              domain: form.get("domain"),
+              fixedReplyToEmail: form.get("replyTo") || null,
+              dailyLimit: Number(form.get("dailyLimit")),
+              batchSize: Number(form.get("batchSize")),
+              minBatchIntervalSeconds: Number(form.get("interval")),
+              timezone: form.get("timezone"),
+              sendWindowStart: form.get("sendWindowStart"),
+              sendWindowEnd: form.get("sendWindowEnd"),
+              allowedWeekdays: form.getAll("weekday").map(Number),
+              warmupEnabled: form.get("warmupEnabled") === "on",
+              warmupStartDate: form.get("warmupStartDate") || null,
+              warmupSchedule,
+              openTrackingEnabled: form.get("openTrackingEnabled") === "on",
+              clickTrackingEnabled: form.get("clickTrackingEnabled") === "on",
+              isActive: form.get("isActive") === "on",
+            },
+          });
+        }}
+      >
+        <input name="name" defaultValue={sender.name} aria-label="Sender profile name" required />
+        <input name="fromName" defaultValue={sender.fromName} aria-label="From name" required />
+        <input
+          name="fromEmail"
+          type="email"
+          defaultValue={sender.fromEmail}
+          aria-label="From email"
+          required
+        />
+        <input name="domain" defaultValue={sender.domain} aria-label="Sending domain" required />
+        <input
+          name="replyTo"
+          type="email"
+          defaultValue={sender.fixedReplyToEmail ?? ""}
+          aria-label="Reply-to fallback"
+        />
+        <input
+          name="dailyLimit"
+          type="number"
+          min="1"
+          defaultValue={sender.dailyLimit}
+          aria-label="Daily quota"
+        />
+        <input
+          name="batchSize"
+          type="number"
+          min="1"
+          max="100"
+          defaultValue={sender.batchSize}
+          aria-label="Batch size"
+        />
+        <input
+          name="interval"
+          type="number"
+          min="1"
+          defaultValue={sender.minBatchIntervalSeconds}
+          aria-label="Batch interval"
+        />
+        <input name="timezone" defaultValue={sender.timezone} aria-label="Timezone" />
+        <input
+          name="sendWindowStart"
+          type="time"
+          defaultValue={sender.sendWindowStart}
+          aria-label="Send window start"
+        />
+        <input
+          name="sendWindowEnd"
+          type="time"
+          defaultValue={sender.sendWindowEnd}
+          aria-label="Send window end"
+        />
+        <div className="weekday-grid">
+          {[0, 1, 2, 3, 4, 5, 6].map((day) => (
+            <label key={day}>
+              <input
+                name="weekday"
+                value={day}
+                type="checkbox"
+                defaultChecked={sender.allowedWeekdays.includes(day)}
+              />
+              {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]}
+            </label>
+          ))}
+        </div>
+        <input
+          name="warmupStartDate"
+          type="date"
+          defaultValue={sender.warmupStartDate?.slice(0, 10) ?? ""}
+          aria-label="Warmup start date"
+        />
+        <textarea
+          name="warmupSchedule"
+          defaultValue={JSON.stringify(sender.warmupSchedule ?? [], null, 2)}
+          aria-label="Warmup schedule JSON"
+        />
+        <label className="check-row">
+          <input name="warmupEnabled" type="checkbox" defaultChecked={sender.warmupEnabled} />{" "}
+          Warmup enabled
+        </label>
+        <label className="check-row">
+          <input
+            name="openTrackingEnabled"
+            type="checkbox"
+            defaultChecked={sender.openTrackingEnabled}
+          />{" "}
+          Open tracking
+        </label>
+        <label className="check-row">
+          <input
+            name="clickTrackingEnabled"
+            type="checkbox"
+            defaultChecked={sender.clickTrackingEnabled}
+          />{" "}
+          Click tracking
+        </label>
+        <label className="check-row">
+          <input name="isActive" type="checkbox" defaultChecked={sender.isActive} /> Active
+        </label>
+        <button className="button secondary">Save sender settings</button>
+      </form>
+      <div className="toolbar">
+        {sender.verificationStatus === "UNVERIFIED" ? (
+          <button
+            className="text-button"
+            onClick={() =>
+              action.mutate({ action: "verify", body: { confirmation: "RESEND_DOMAIN_VERIFIED" } })
+            }
+          >
+            Confirm Resend DNS verified
+          </button>
+        ) : null}
+        {sender.verificationStatus !== "SUSPENDED" ? (
+          <button
+            className="text-button danger"
+            onClick={() => {
+              const reason = window.prompt("Reason for suspending this sender:");
+              if (reason && reason.length >= 5)
+                action.mutate({
+                  action: "suspend",
+                  body: { confirmation: "SUSPEND_SENDER", reason },
+                });
+            }}
+          >
+            Suspend
+          </button>
+        ) : (
+          <button
+            className="text-button"
+            onClick={() =>
+              action.mutate({ action: "reactivate", body: { confirmation: "REACTIVATE_SENDER" } })
+            }
+          >
+            Reactivate after DNS review
+          </button>
+        )}
+        {!sender.isDefault ? (
+          <button
+            className="text-button"
+            onClick={() =>
+              action.mutate({ action: "default", body: { confirmation: "SET_DEFAULT_SENDER" } })
+            }
+          >
+            Make default
+          </button>
+        ) : null}
+        <button
+          className="text-button danger"
+          onClick={() => {
+            if (window.confirm("Delete only if this sender has never been used by a campaign?"))
+              action.mutate({ action: "delete" });
+          }}
+        >
+          Delete unreferenced
+        </button>
+      </div>
+      <small>
+        Quota: {quota.data?.usage[0]?.acceptedCount ?? 0} accepted ·{" "}
+        {quota.data?.usage[0]?.reservedCount ?? 0} reserved ·{" "}
+        {quota.data?.usage[0]?.releasedCount ?? 0} released today
+      </small>
+      {action.error ? <p className="form-error">{action.error.message}</p> : null}
+    </details>
+  );
+}
+
+function IntegrationOperations() {
+  const client = useQueryClient();
+  const oneKey = useQuery({
+    queryKey: ["onekey-status"],
+    queryFn: () =>
+      api<{
+        provider: string;
+        enabled: boolean;
+        indexed: number;
+        imported: number;
+        cursor?: { lastSucceededAt?: string; lastError?: string };
+      }>("/api/v2/onekey/status"),
+  });
+  const ai = useQuery({
+    queryKey: ["ai-status"],
+    queryFn: () => api<{ enabled: boolean; provider: string; model: string }>("/api/v2/ai/status"),
+  });
+  const webhooks = useQuery({
+    queryKey: ["webhook-operations"],
+    queryFn: () =>
+      api<
+        ListResponse<{
+          id: string;
+          eventType: string;
+          reconciliationStatus: string;
+          reconciliationAttempts: number;
+          nextReconcileAt?: string;
+          processingError?: string;
+        }>
+      >("/api/v2/operations/webhooks"),
+  });
+  const reviews = useQuery({
+    queryKey: ["manual-reviews"],
+    queryFn: () =>
+      api<
+        ListResponse<{
+          id: string;
+          status: string;
+          campaign: { name: string };
+          recipients: Array<{ id: string; email: string; lastErrorMessage?: string }>;
+        }>
+      >("/api/v2/operations/manual-review"),
+  });
+  const oneKeyAction = useMutation({
+    mutationFn: (action: "test" | "initial" | "delta" | "rebuild") =>
+      api(action === "test" ? "/api/v2/onekey/test" : `/api/v2/onekey/sync/${action}`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+    onSuccess: () => void oneKey.refetch(),
+  });
+  const resolve = useMutation({
+    mutationFn: (input: { batchId: string; action: string; recipientId?: string }) => {
+      const reason = window.prompt(`Reason for ${input.action}:`);
+      if (!reason || reason.trim().length < 5)
+        throw new Error("A reason of at least 5 characters is required.");
+      const providerEmailId =
+        input.action === "ATTACH_PROVIDER_ID"
+          ? (window.prompt("Provider email ID:") ?? undefined)
+          : undefined;
+      return api(`/api/v2/operations/manual-review/${input.batchId}/resolve`, {
+        method: "POST",
+        body: JSON.stringify({
+          action: input.action,
+          confirmation: input.action,
+          reason,
+          recipientId: input.recipientId,
+          providerEmailId,
+        }),
+      });
+    },
+    onSuccess: () => {
+      void reviews.refetch();
+      void client.invalidateQueries({ queryKey: ["summary"] });
+    },
+  });
+  return (
+    <article className="panel operations-panel">
+      <span className="eyebrow">Integrations & operations</span>
+      <h2>Pre-deploy controls</h2>
+      <div className="notice">
+        <strong>OneKey · {oneKey.data?.provider ?? "loading"}</strong>
+        <span>
+          {oneKey.data?.indexed ?? 0} indexed · {oneKey.data?.imported ?? 0} imported · last success{" "}
+          {formatEt(oneKey.data?.cursor?.lastSucceededAt)}
+        </span>
+        <div className="toolbar">
+          <button className="text-button" onClick={() => oneKeyAction.mutate("test")}>
+            Test connection
+          </button>
+          <button className="text-button" onClick={() => oneKeyAction.mutate("initial")}>
+            Initial sync
+          </button>
+          <button className="text-button" onClick={() => oneKeyAction.mutate("delta")}>
+            Delta sync
+          </button>
+          <button className="text-button" onClick={() => oneKeyAction.mutate("rebuild")}>
+            Rebuild index
+          </button>
+        </div>
+      </div>
+      <div className="notice">
+        <strong>AI · {ai.data?.provider ?? "loading"}</strong>
+        <span>
+          {ai.data?.enabled
+            ? `${ai.data.model} enabled`
+            : "Disabled; deterministic editing remains active"}
+        </span>
+      </div>
+      <h3>Webhook reconciliation</h3>
+      {webhooks.data?.items.length ? (
+        <div className="stack-list">
+          {webhooks.data.items.map((event) => (
+            <div key={event.id}>
+              <span>
+                {event.eventType} · {event.reconciliationStatus} · attempt{" "}
+                {event.reconciliationAttempts}
+              </span>
+              <small>{event.processingError ?? formatEt(event.nextReconcileAt)}</small>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p>No unresolved or dead-letter webhooks.</p>
+      )}
+      <h3>Manual send review</h3>
+      {reviews.data?.items.length ? (
+        reviews.data.items.map((batch) => (
+          <div className="notice warning" key={batch.id}>
+            <strong>
+              {batch.campaign.name} · {batch.recipients.length} recipients
+            </strong>
+            <span>{batch.recipients[0]?.lastErrorMessage ?? "Provider outcome is uncertain."}</span>
+            <div className="toolbar">
+              {[
+                "MARK_ACCEPTED",
+                "MARK_NOT_SENT",
+                "SAFE_RETRY",
+                "RELEASE_QUOTA",
+                "KEEP_IN_REVIEW",
+              ].map((actionName) => (
+                <button
+                  className="text-button"
+                  key={actionName}
+                  onClick={() => resolve.mutate({ batchId: batch.id, action: actionName })}
+                >
+                  {actionName.replaceAll("_", " ")}
+                </button>
+              ))}
+              {batch.recipients[0] ? (
+                <button
+                  className="text-button"
+                  onClick={() =>
+                    resolve.mutate({
+                      batchId: batch.id,
+                      action: "ATTACH_PROVIDER_ID",
+                      recipientId: batch.recipients[0]!.id,
+                    })
+                  }
+                >
+                  ATTACH PROVIDER ID
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ))
+      ) : (
+        <p>No batches require manual review.</p>
+      )}
+      {oneKeyAction.error || resolve.error ? (
+        <p className="form-error">{(oneKeyAction.error ?? resolve.error)?.message}</p>
+      ) : null}
+    </article>
   );
 }
 

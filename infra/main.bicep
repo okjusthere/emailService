@@ -26,14 +26,37 @@ param entraClientSecret string = ''
 param resendApiKey string = ''
 @secure()
 param resendWebhookSecret string = ''
+@secure()
+param unsubscribeSigningSecret string = ''
+@secure()
+param unsubscribePreviousSigningSecret string = ''
+param usePreviousUnsubscribeSigningSecret bool = false
+@secure()
+param bboMarketingApiKey string = ''
+param useBboMarketingApiKey bool = false
+@secure()
+param mlsGridAccessToken string = ''
+param useMlsGridAccessToken bool = false
+@secure()
+param openAiApiKey string = ''
+param useOpenAiApiKey bool = false
 param useResendSecrets bool = false
 param usePreviousResendWebhookSecret bool = false
 @secure()
 param resendWebhookPreviousSecretExpiresAt string = ''
+@secure()
+param unsubscribePreviousSigningSecretExpiresAt string = ''
 param useEntraClientSecret bool = false
 @allowed(['disabled', 'sandbox', 'live'])
 param emailDeliveryMode string = 'disabled'
 param baseUrl string
+@allowed(['disabled', 'bbo', 'fake'])
+param oneKeyProvider string = 'disabled'
+param bboListingApiBaseUrl string = ''
+param oneKeySyncEnabled bool = false
+@allowed(['disabled', 'openai', 'fake'])
+param aiProvider string = 'disabled'
+param openAiModel string = 'gpt-5-mini'
 param bootstrapAdminEmails string
 param companyPostalAddress string = 'REQUIRED_BEFORE_LIVE_SEND'
 param alertEmail string = ''
@@ -83,11 +106,20 @@ var commonSecrets = concat([
   { name: 'database-url', keyVaultUrl: '${vault.properties.vaultUri}secrets/postgres-runtime-url', identity: identity.id }
   { name: 'direct-database-url', keyVaultUrl: '${vault.properties.vaultUri}secrets/postgres-direct-url', identity: identity.id }
   { name: 'session-secret', keyVaultUrl: '${vault.properties.vaultUri}secrets/session-secret', identity: identity.id }
+  { name: 'unsubscribe-signing-secret', keyVaultUrl: '${vault.properties.vaultUri}secrets/unsubscribe-signing-secret', identity: identity.id }
 ], useResendSecrets ? [
   { name: 'resend-api-key', keyVaultUrl: '${vault.properties.vaultUri}secrets/resend-api-key', identity: identity.id }
   { name: 'resend-webhook-secret', keyVaultUrl: '${vault.properties.vaultUri}secrets/resend-webhook-secret', identity: identity.id }
 ] : [], usePreviousResendWebhookSecret ? [
   { name: 'resend-webhook-previous-secret', keyVaultUrl: '${vault.properties.vaultUri}secrets/resend-webhook-previous-secret', identity: identity.id }
+] : [], usePreviousUnsubscribeSigningSecret ? [
+  { name: 'unsubscribe-previous-signing-secret', keyVaultUrl: '${vault.properties.vaultUri}secrets/unsubscribe-previous-signing-secret', identity: identity.id }
+] : [], useBboMarketingApiKey ? [
+  { name: 'bbo-marketing-api-key', keyVaultUrl: '${vault.properties.vaultUri}secrets/bbo-marketing-api-key', identity: identity.id }
+] : [], useMlsGridAccessToken ? [
+  { name: 'mls-grid-access-token', keyVaultUrl: '${vault.properties.vaultUri}secrets/mls-grid-access-token', identity: identity.id }
+] : [], useOpenAiApiKey ? [
+  { name: 'openai-api-key', keyVaultUrl: '${vault.properties.vaultUri}secrets/openai-api-key', identity: identity.id }
 ] : [], useEntraClientSecret ? [{ name: 'entra-client-secret', keyVaultUrl: '${vault.properties.vaultUri}secrets/entra-client-secret', identity: identity.id }] : [])
 var commonEnv = concat([
   { name: 'NODE_ENV', value: 'production' }
@@ -97,6 +129,7 @@ var commonEnv = concat([
   { name: 'DATABASE_URL', secretRef: 'database-url' }
   { name: 'DIRECT_DATABASE_URL', secretRef: 'direct-database-url' }
   { name: 'SESSION_SECRET', secretRef: 'session-secret' }
+  { name: 'UNSUBSCRIBE_SIGNING_SECRET', secretRef: 'unsubscribe-signing-secret' }
   { name: 'AUTH_MODE', value: 'azure-easyauth' }
   { name: 'BOOTSTRAP_ADMIN_EMAILS', value: bootstrapAdminEmails }
   { name: 'AUTO_PROVISION_USERS', value: 'false' }
@@ -117,7 +150,14 @@ var commonEnv = concat([
   { name: 'JOB_LOCK_SECONDS', value: '120' }
   { name: 'WEBHOOK_RETENTION_DAYS', value: '90' }
   { name: 'AUDIT_RETENTION_DAYS', value: '365' }
-], useResendSecrets ? [{ name: 'RESEND_API_KEY', secretRef: 'resend-api-key' }, { name: 'RESEND_WEBHOOK_SECRET', secretRef: 'resend-webhook-secret' }] : [], usePreviousResendWebhookSecret ? [{ name: 'RESEND_WEBHOOK_PREVIOUS_SECRET', secretRef: 'resend-webhook-previous-secret' }, { name: 'RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT', value: resendWebhookPreviousSecretExpiresAt }] : [])
+  { name: 'ONEKEY_PROVIDER', value: oneKeyProvider }
+  { name: 'BBO_LISTING_API_BASE_URL', value: bboListingApiBaseUrl }
+  { name: 'ONEKEY_SYNC_ENABLED', value: string(oneKeySyncEnabled) }
+  { name: 'MLS_GRID_BASE_URL', value: 'https://api.mlsgrid.com/v2' }
+  { name: 'MLS_GRID_ORIGINATING_SYSTEM_NAME', value: 'onekey2' }
+  { name: 'AI_PROVIDER', value: aiProvider }
+  { name: 'OPENAI_MODEL', value: openAiModel }
+], useResendSecrets ? [{ name: 'RESEND_API_KEY', secretRef: 'resend-api-key' }, { name: 'RESEND_WEBHOOK_SECRET', secretRef: 'resend-webhook-secret' }] : [], usePreviousResendWebhookSecret ? [{ name: 'RESEND_WEBHOOK_PREVIOUS_SECRET', secretRef: 'resend-webhook-previous-secret' }, { name: 'RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT', value: resendWebhookPreviousSecretExpiresAt }] : [], usePreviousUnsubscribeSigningSecret ? [{ name: 'UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET', secretRef: 'unsubscribe-previous-signing-secret' }, { name: 'UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET_EXPIRES_AT', value: unsubscribePreviousSigningSecretExpiresAt }] : [], useBboMarketingApiKey ? [{ name: 'BBO_MARKETING_API_KEY', secretRef: 'bbo-marketing-api-key' }] : [], useMlsGridAccessToken ? [{ name: 'MLS_GRID_ACCESS_TOKEN', secretRef: 'mls-grid-access-token' }] : [], useOpenAiApiKey ? [{ name: 'OPENAI_API_KEY', secretRef: 'openai-api-key' }] : [])
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: acrName
@@ -239,7 +279,12 @@ resource vaultDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@
 resource postgresPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(postgresAdminPassword)) { parent: vault, name: 'postgres-admin-password', properties: { value: postgresAdminPassword } }
 resource databaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(postgresAdminPassword)) { parent: vault, name: 'postgres-runtime-url', properties: { value: postgresRuntimeUrl } }
 resource directDatabaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(postgresAdminPassword)) { parent: vault, name: 'postgres-direct-url', properties: { value: postgresDirectUrl } }
-resource sessionSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(postgresAdminPassword)) { parent: vault, name: 'session-secret', properties: { value: uniqueString(postgresAdminPassword, resourceGroup().id, 'session') } }
+resource sessionSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(postgresAdminPassword)) { parent: vault, name: 'session-secret', properties: { value: guid(postgresAdminPassword, resourceGroup().id, 'session') } }
+resource unsubscribeSigningSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(unsubscribeSigningSecret) || !empty(postgresAdminPassword)) { parent: vault, name: 'unsubscribe-signing-secret', properties: { value: !empty(unsubscribeSigningSecret) ? unsubscribeSigningSecret : guid(postgresAdminPassword, resourceGroup().id, 'unsubscribe') } }
+resource unsubscribePreviousSigningSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (usePreviousUnsubscribeSigningSecret && !empty(unsubscribePreviousSigningSecret)) { parent: vault, name: 'unsubscribe-previous-signing-secret', properties: { value: unsubscribePreviousSigningSecret } }
+resource bboMarketingApiKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (useBboMarketingApiKey && !empty(bboMarketingApiKey)) { parent: vault, name: 'bbo-marketing-api-key', properties: { value: bboMarketingApiKey } }
+resource mlsGridAccessTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (useMlsGridAccessToken && !empty(mlsGridAccessToken)) { parent: vault, name: 'mls-grid-access-token', properties: { value: mlsGridAccessToken } }
+resource openAiApiKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (useOpenAiApiKey && !empty(openAiApiKey)) { parent: vault, name: 'openai-api-key', properties: { value: openAiApiKey } }
 resource resendApiKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(resendApiKey)) { parent: vault, name: 'resend-api-key', properties: { value: resendApiKey } }
 resource resendWebhookSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(resendWebhookSecret)) { parent: vault, name: 'resend-webhook-secret', properties: { value: resendWebhookSecret } }
 resource entraClientSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(entraClientSecret)) { parent: vault, name: 'entra-client-secret', properties: { value: entraClientSecret } }
@@ -295,7 +340,7 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
       scale: { minReplicas: webMinReplicas, maxReplicas: webMaxReplicas, rules: [{ name: 'http', http: { metadata: { concurrentRequests: '50' } } }] }
     }
   }
-  dependsOn: [keyVaultRole, blobRole, acrPullRole, storageDnsGroup, vaultDnsGroup, database, databaseUrlSecret, directDatabaseUrlSecret, sessionSecret]
+  dependsOn: [keyVaultRole, blobRole, acrPullRole, storageDnsGroup, vaultDnsGroup, database, databaseUrlSecret, directDatabaseUrlSecret, sessionSecret, unsubscribeSigningSecretResource, unsubscribePreviousSigningSecretResource, bboMarketingApiKeySecret, mlsGridAccessTokenSecret, openAiApiKeySecret]
 }
 
 resource worker 'Microsoft.App/containerApps@2024-03-01' = {
@@ -321,7 +366,7 @@ resource migrationJob 'Microsoft.App/jobs@2024-03-01' = {
     configuration: { triggerType: 'Manual', replicaTimeout: 1800, replicaRetryLimit: 0, manualTriggerConfig: { parallelism: 1, replicaCompletionCount: 1 }, registries: [{ server: registry.properties.loginServer, identity: identity.id }], secrets: commonSecrets }
     template: { containers: [{ name: 'migrate', image: migrationContainerImage, env: concat(commonEnv, [{ name: 'APP_ROLE', value: 'migrate' }]), resources: { cpu: json('0.5'), memory: '1Gi' } }] }
   }
-  dependsOn: [keyVaultRole, acrPullRole, database, databaseUrlSecret, directDatabaseUrlSecret, sessionSecret]
+  dependsOn: [keyVaultRole, acrPullRole, database, databaseUrlSecret, directDatabaseUrlSecret, sessionSecret, unsubscribeSigningSecretResource, unsubscribePreviousSigningSecretResource, bboMarketingApiKeySecret, mlsGridAccessTokenSecret, openAiApiKeySecret]
 }
 
 resource webAuth 'Microsoft.App/containerApps/authConfigs@2024-03-01' = {
