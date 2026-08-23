@@ -40,6 +40,12 @@ const envSchema = z
     RESEND_WEBHOOK_SECRET: z.string().default(""),
     RESEND_WEBHOOK_PREVIOUS_SECRET: z.string().default(""),
     RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT: z.string().default(""),
+    UNSUBSCRIBE_SIGNING_SECRET: z
+      .string()
+      .min(32)
+      .default("development-unsubscribe-secret-change-me"),
+    UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET: z.string().default(""),
+    UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET_EXPIRES_AT: z.string().default(""),
     EMAIL_PROVIDER: z.enum(["resend", "fake"]).default("resend"),
     EMAIL_DELIVERY_MODE: z.enum(["disabled", "sandbox", "live"]).default("disabled"),
     EMAIL_TEST_ALLOWLIST: csvString,
@@ -57,6 +63,21 @@ const envSchema = z
     JOB_LOCK_SECONDS: z.coerce.number().int().min(30).default(120),
     WEBHOOK_RETENTION_DAYS: z.coerce.number().int().min(1).default(90),
     AUDIT_RETENTION_DAYS: z.coerce.number().int().min(365).default(365),
+    ONEKEY_PROVIDER: z.enum(["disabled", "bbo", "fake"]).default("disabled"),
+    BBO_LISTING_API_BASE_URL: z.string().default(""),
+    BBO_MARKETING_API_KEY: z.string().default(""),
+    MLS_GRID_BASE_URL: z.string().default("https://api.mlsgrid.com/v2"),
+    MLS_GRID_ACCESS_TOKEN: z.string().default(""),
+    MLS_GRID_ORIGINATING_SYSTEM_NAME: z.string().default("onekey2"),
+    ONEKEY_SYNC_ENABLED: booleanString,
+    ONEKEY_SYNC_PAGE_SIZE: z.coerce.number().int().min(1).max(500).default(100),
+    ONEKEY_SYNC_STATUSES: z.string().default("Active,Coming Soon,Pending"),
+    ONEKEY_MEDIA_LIMIT: z.coerce.number().int().min(1).max(25).default(25),
+    AI_PROVIDER: z.enum(["disabled", "openai", "fake"]).default("disabled"),
+    OPENAI_API_KEY: z.string().default(""),
+    OPENAI_MODEL: z.string().default("gpt-5-mini"),
+    AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
+    AI_RATE_LIMIT_PER_HOUR: z.coerce.number().int().min(1).max(1000).default(30),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV === "production" && env.AUTH_MODE === "local") {
@@ -126,6 +147,43 @@ const envSchema = z
         message: "Azure storage URL is required",
       });
     }
+    if (
+      env.NODE_ENV === "production" &&
+      /development|change-me|required|placeholder/i.test(env.UNSUBSCRIBE_SIGNING_SECRET)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["UNSUBSCRIBE_SIGNING_SECRET"],
+        message: "Production requires a non-placeholder unsubscribe signing secret",
+      });
+    }
+    if (
+      env.UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET &&
+      !env.UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET_EXPIRES_AT
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET_EXPIRES_AT"],
+        message: "Previous unsubscribe secrets require an expiry timestamp",
+      });
+    }
+    if (
+      env.ONEKEY_PROVIDER === "bbo" &&
+      (!env.BBO_LISTING_API_BASE_URL || !env.BBO_MARKETING_API_KEY)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["BBO_MARKETING_API_KEY"],
+        message: "The BBO OneKey provider requires its base URL and API key",
+      });
+    }
+    if (env.AI_PROVIDER === "openai" && !env.OPENAI_API_KEY) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["OPENAI_API_KEY"],
+        message: "The OpenAI AI provider requires OPENAI_API_KEY",
+      });
+    }
   });
 
 export type AppConfig = ReturnType<typeof parseEnv>;
@@ -159,6 +217,10 @@ export function parseEnv(input: NodeJS.ProcessEnv) {
     resendWebhookSecret: parsed.data.RESEND_WEBHOOK_SECRET,
     resendWebhookPreviousSecret: parsed.data.RESEND_WEBHOOK_PREVIOUS_SECRET,
     resendWebhookPreviousSecretExpiresAt: parsed.data.RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT,
+    unsubscribeSigningSecret: parsed.data.UNSUBSCRIBE_SIGNING_SECRET,
+    unsubscribePreviousSigningSecret: parsed.data.UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET,
+    unsubscribePreviousSigningSecretExpiresAt:
+      parsed.data.UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET_EXPIRES_AT,
     emailProvider: parsed.data.EMAIL_PROVIDER,
     deliveryMode: parsed.data.EMAIL_DELIVERY_MODE,
     testAllowlist: parsed.data.EMAIL_TEST_ALLOWLIST,
@@ -176,6 +238,23 @@ export function parseEnv(input: NodeJS.ProcessEnv) {
     jobLockSeconds: parsed.data.JOB_LOCK_SECONDS,
     webhookRetentionDays: parsed.data.WEBHOOK_RETENTION_DAYS,
     auditRetentionDays: parsed.data.AUDIT_RETENTION_DAYS,
+    oneKeyProvider: parsed.data.ONEKEY_PROVIDER,
+    bboListingApiBaseUrl: parsed.data.BBO_LISTING_API_BASE_URL.replace(/\/$/, ""),
+    bboMarketingApiKey: parsed.data.BBO_MARKETING_API_KEY,
+    mlsGridBaseUrl: parsed.data.MLS_GRID_BASE_URL.replace(/\/$/, ""),
+    mlsGridAccessToken: parsed.data.MLS_GRID_ACCESS_TOKEN,
+    mlsGridOriginatingSystemName: parsed.data.MLS_GRID_ORIGINATING_SYSTEM_NAME,
+    oneKeySyncEnabled: parsed.data.ONEKEY_SYNC_ENABLED,
+    oneKeySyncPageSize: parsed.data.ONEKEY_SYNC_PAGE_SIZE,
+    oneKeySyncStatuses: parsed.data.ONEKEY_SYNC_STATUSES.split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+    oneKeyMediaLimit: parsed.data.ONEKEY_MEDIA_LIMIT,
+    aiProvider: parsed.data.AI_PROVIDER,
+    openAiApiKey: parsed.data.OPENAI_API_KEY,
+    openAiModel: parsed.data.OPENAI_MODEL,
+    aiRequestTimeoutMs: parsed.data.AI_REQUEST_TIMEOUT_MS,
+    aiRateLimitPerHour: parsed.data.AI_RATE_LIMIT_PER_HOUR,
   } as const;
 }
 

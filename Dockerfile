@@ -6,11 +6,11 @@ WORKDIR /app
 
 FROM base AS dependencies
 COPY package.json package-lock.json ./
+COPY prisma ./prisma
 RUN npm ci
 
 FROM dependencies AS build
 COPY tsconfig.json tsconfig.server.json eslint.config.js .prettierrc.json ./
-COPY prisma ./prisma
 COPY src ./src
 COPY scripts ./scripts
 COPY client ./client
@@ -20,7 +20,6 @@ FROM base AS production-dependencies
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
 RUN npm ci --omit=dev \
-  && npm run prisma:generate \
   && npm cache clean --force
 
 FROM base AS runtime

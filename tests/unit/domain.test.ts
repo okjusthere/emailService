@@ -8,6 +8,7 @@ import {
   unsubscribeHeaders,
   validateRenderedEmail,
   verifyUnsubscribeToken,
+  verifyUnsubscribeTokenWithRotation,
 } from "../../src/email/compliance.js";
 import { FakeEmailProvider } from "../../src/email/providers/FakeEmailProvider.js";
 import { parseEasyAuthPrincipal } from "../../src/modules/auth/EasyAuthPrincipalParser.js";
@@ -264,6 +265,27 @@ describe("security boundaries", () => {
     );
     expect(verifyUnsubscribeToken(`${unsubscribe}x`, secret)).toBeNull();
     expect(verifyUnsubscribeToken("invalid", secret)).toBeNull();
+    const previousSecret = "a-previous-unsubscribe-secret-with-enough-bytes";
+    const previousToken = createUnsubscribeToken(
+      "22222222-2222-4222-8222-222222222222",
+      previousSecret
+    );
+    expect(
+      verifyUnsubscribeTokenWithRotation(
+        previousToken,
+        secret,
+        previousSecret,
+        new Date(Date.now() + 60_000).toISOString()
+      )
+    ).toBe("22222222-2222-4222-8222-222222222222");
+    expect(
+      verifyUnsubscribeTokenWithRotation(
+        previousToken,
+        secret,
+        previousSecret,
+        new Date(Date.now() - 60_000).toISOString()
+      )
+    ).toBeNull();
     expect(hashUnsubscribeToken(unsubscribe)).toHaveLength(64);
     expect(unsubscribeHeaders("https://example.com/one-click")).toEqual({
       "List-Unsubscribe": "<https://example.com/one-click>",
@@ -348,6 +370,7 @@ describe("security boundaries", () => {
       AUTH_MODE: "azure-easyauth",
       STORAGE_PROVIDER: "local",
       SESSION_SECRET: "a-secure-production-session-secret",
+      UNSUBSCRIBE_SIGNING_SECRET: "a-secure-production-unsubscribe-signing-secret",
     } as NodeJS.ProcessEnv;
     expect(() => parseEnv(production)).toThrow(/must use Azure Blob Storage/);
 
@@ -364,6 +387,64 @@ describe("security boundaries", () => {
         COMPANY_POSTAL_ADDRESS: "123 Main Street, New York, NY 10001",
       })
     ).toThrow(/public application URL/);
+  });
+
+  it("validates independent unsubscribe, BBO, OpenAI, and worker provider configuration", () => {
+    const safe = {
+      DATABASE_URL: "postgresql://db/runtime?sslmode=require",
+      DIRECT_DATABASE_URL: "postgresql://db/admin?sslmode=require",
+      NODE_ENV: "production",
+      AUTH_MODE: "azure-easyauth",
+      DEV_BYPASS_AUTH: "false",
+      STORAGE_PROVIDER: "azure",
+      AZURE_STORAGE_ACCOUNT_URL: "https://assets.blob.core.windows.net",
+      SESSION_SECRET: "a-secure-production-session-secret",
+      UNSUBSCRIBE_SIGNING_SECRET: "a-secure-production-unsubscribe-signing-secret",
+      BASE_URL: "https://marketing.homixny.com",
+      COMPANY_POSTAL_ADDRESS: "123 Main Street, New York, NY 10001",
+      EMAIL_DELIVERY_MODE: "disabled",
+    } as NodeJS.ProcessEnv;
+    expect(() => parseEnv(safe)).not.toThrow();
+    expect(() =>
+      parseEnv({ ...safe, UNSUBSCRIBE_SIGNING_SECRET: "production-change-me-placeholder" })
+    ).toThrow(/non-placeholder unsubscribe/);
+    expect(() =>
+      parseEnv({
+        ...safe,
+        UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET: "a-previous-secret-with-at-least-thirty-two-bytes",
+      })
+    ).toThrow(/require an expiry/);
+    expect(() =>
+      parseEnv({
+        ...safe,
+        UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET: "a-previous-secret-with-at-least-thirty-two-bytes",
+        UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET_EXPIRES_AT: "2026-09-01T00:00:00Z",
+      })
+    ).not.toThrow();
+    expect(() => parseEnv({ ...safe, ONEKEY_PROVIDER: "bbo" })).toThrow(/BBO OneKey provider/);
+    expect(() =>
+      parseEnv({
+        ...safe,
+        ONEKEY_PROVIDER: "bbo",
+        BBO_LISTING_API_BASE_URL: "https://onekey.example.test/api/v1",
+        BBO_MARKETING_API_KEY: "bbo-placeholder-for-structure-only",
+      })
+    ).not.toThrow();
+    expect(() => parseEnv({ ...safe, AI_PROVIDER: "openai" })).toThrow(/OPENAI_API_KEY/);
+    expect(() =>
+      parseEnv({ ...safe, AI_PROVIDER: "openai", OPENAI_API_KEY: "openai-test-placeholder" })
+    ).not.toThrow();
+    expect(() =>
+      parseEnv({
+        ...safe,
+        APP_ROLE: "worker",
+        EMAIL_DELIVERY_MODE: "sandbox",
+        EMAIL_PROVIDER: "resend",
+      })
+    ).toThrow(/Worker delivery requires a Resend key/);
+    expect(() =>
+      parseEnv({ ...safe, STORAGE_PROVIDER: "azure", AZURE_STORAGE_ACCOUNT_URL: "" })
+    ).toThrow(/Azure storage URL/);
   });
 
   it("sanitizes rich text and rejects SVG by magic bytes", () => {

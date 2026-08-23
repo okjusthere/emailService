@@ -43,7 +43,7 @@ az deployment group create --only-show-errors \
   --resource-group "${resource_group}" \
   --template-file infra/main.bicep \
   --parameters "${parameters_file}" \
-  --parameters containerImage="${image_tag}" acrName="${acr_name}" postgresAdminPassword="${postgres_password}" emailDeliveryMode=disabled useResendSecrets=false useEntraClientSecret=false
+  --parameters containerImage="${image_tag}" acrName="${acr_name}" postgresAdminPassword="${postgres_password}" emailDeliveryMode=disabled useResendSecrets=false useEntraClientSecret=false oneKeyProvider=disabled oneKeySyncEnabled=false useBboMarketingApiKey=false useMlsGridAccessToken=false aiProvider=disabled useOpenAiApiKey=false
 unset postgres_password
 
 migration_job="$(az deployment group show --only-show-errors --resource-group "${resource_group}" --name "${main_name}" --query properties.outputs.migrationJobName.value -o tsv)"

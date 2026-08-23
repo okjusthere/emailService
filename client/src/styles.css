@@ -10,6 +10,9 @@
   --gold: #a8884f;
   --muted: #69746d;
   --danger: #9e3f36;
+  --accent: var(--rust);
+  --border: var(--line);
+  --surface-muted: #f3f0e8;
   --sidebar: 236px;
 }
 
@@ -140,6 +143,73 @@ h3 {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.onekey-panel {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.onekey-result,
+.proposal-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.onekey-result div,
+.proposal-row span {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.source-review,
+.proposal-review,
+.campaign-ai,
+.sender-controls {
+  display: grid;
+  gap: 0.8rem;
+  margin-top: 1rem;
+}
+
+.source-review pre {
+  max-height: 18rem;
+  overflow: auto;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--surface-muted);
+  white-space: pre-wrap;
+  font-size: 0.75rem;
+}
+
+.proposal-row {
+  justify-content: flex-start;
+}
+
+.proposal-row input {
+  margin-top: 0.25rem;
+}
+
+.proposal-row small {
+  overflow-wrap: anywhere;
+}
+
+.weekday-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.weekday-grid label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.operations-panel {
+  grid-column: 1 / -1;
 }
 
 .shell {

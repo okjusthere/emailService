@@ -54,8 +54,9 @@ async function messagesForBatch(
   const frozen = snapshot(campaign.contentSnapshot);
   return Promise.all(
     recipients.map(async (recipient) => {
-      const token = createUnsubscribeToken(recipient.id, config.sessionSecret);
-      const unsubscribeUrl = `${config.baseUrl}/api/public/unsubscribe/one-click?token=${encodeURIComponent(token)}`;
+      const token = createUnsubscribeToken(recipient.id, config.unsubscribeSigningSecret);
+      const visibleUnsubscribeUrl = `${config.baseUrl}/unsubscribe?token=${encodeURIComponent(token)}`;
+      const oneClickUnsubscribeUrl = `${config.baseUrl}/api/public/unsubscribe/one-click?token=${encodeURIComponent(token)}`;
       const rendered = await renderListingEmail({
         snapshot: frozen,
         recipient: {
@@ -64,7 +65,7 @@ async function messagesForBatch(
             recipient.displayName ??
             ([recipient.firstName, recipient.lastName].filter(Boolean).join(" ") || undefined),
           company: recipient.company ?? undefined,
-          unsubscribeUrl,
+          unsubscribeUrl: visibleUnsubscribeUrl,
         },
         templateKey: campaign.templateKey,
         live: config.deliveryMode === "live",
@@ -76,7 +77,7 @@ async function messagesForBatch(
         subject: rendered.subject,
         html: rendered.html,
         text: rendered.text,
-        headers: unsubscribeHeaders(unsubscribeUrl),
+        headers: unsubscribeHeaders(oneClickUnsubscribeUrl),
         tags: [
           { name: "campaign_id", value: campaign.id },
           { name: "recipient_id", value: recipient.id },

@@ -1,5 +1,5 @@
 import { CampaignStatus, Prisma } from "@prisma/client";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { config } from "../../config/index.js";
 import { inTransaction } from "../../db/transactions.js";
@@ -318,6 +318,7 @@ export async function testSendCampaign(
   id: string,
   emailInput: string,
   version: number,
+  clientRequestId: string,
   actor: ActorContext
 ) {
   if (config.deliveryMode === "disabled")
@@ -351,7 +352,11 @@ export async function testSendCampaign(
     },
     templateKey: campaign.templateKey,
   });
-  const idempotencyKey = `test/${campaign.id}/version/${campaign.version}/actor/${actor.userId}`;
+  const recipientHash = createHash("sha256").update(email).digest("hex");
+  const idempotencyKey = `test/${campaign.id}/version/${campaign.version}/actor/${actor.userId}/recipient/${recipientHash}/request/${clientRequestId}`;
+  const existing = await prisma.testSendRecord.findUnique({ where: { idempotencyKey } });
+  if (existing?.success)
+    return { accepted: true, providerEmailId: existing.providerEmailId, duplicate: true };
   const result = await getEmailProvider().sendSingle(
     {
       from: `${snapshot.sender.fromName} <${snapshot.sender.fromEmail}>`,
@@ -369,15 +374,22 @@ export async function testSendCampaign(
     { idempotencyKey }
   );
   await inTransaction(async (tx) => {
-    await tx.testSendRecord.create({
-      data: {
+    await tx.testSendRecord.upsert({
+      where: { idempotencyKey },
+      create: {
         campaignId: id,
         campaignVersion: version,
         recipientMasked: maskEmail(email),
         templateVersion: snapshot.templateVersion,
         providerEmailId: result.providerEmailId,
         success: result.accepted,
+        idempotencyKey,
+        clientRequestId,
         createdByUserId: actor.userId,
+      },
+      update: {
+        providerEmailId: result.providerEmailId,
+        success: result.accepted,
       },
     });
     if (result.accepted)
@@ -399,7 +411,7 @@ export async function testSendCampaign(
       502,
       { code: result.code }
     );
-  return { accepted: true, providerEmailId: result.providerEmailId };
+  return { accepted: true, providerEmailId: result.providerEmailId, duplicate: false };
 }
 
 export async function snapshotCampaign(
@@ -477,7 +489,7 @@ export async function snapshotCampaign(
           : new Set<string>();
       const recipients = contacts.map((contact) => {
         const recipientId = randomUUID();
-        const token = createUnsubscribeToken(recipientId, config.sessionSecret);
+        const token = createUnsubscribeToken(recipientId, config.unsubscribeSigningSecret);
         const suppressionReason = suppressedByEmail.get(contact.emailNormalized);
         const unknownPermission =
           (filter.requireKnownPermissionBasis ?? true) && contact.permissionBasis === "UNKNOWN";

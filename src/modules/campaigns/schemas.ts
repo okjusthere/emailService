@@ -36,4 +36,8 @@ export const campaignInputSchema = z.object({
   timezone: z.string().default("America/New_York"),
 });
 
-export const testSendSchema = z.object({ email: z.email(), version: z.number().int().positive() });
+export const testSendSchema = z.object({
+  email: z.email(),
+  version: z.number().int().positive(),
+  clientRequestId: z.uuid(),
+});

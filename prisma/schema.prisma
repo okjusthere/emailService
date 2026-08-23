@@ -45,7 +45,20 @@ enum ContactSourceType {
   MANUAL
   REFERRAL
   LEGACY_EMAIL_SERVICE
+  MLS_AGENT_MATCH
   OTHER
+}
+
+enum ListingSource {
+  MANUAL
+  ONEKEY
+}
+
+enum ListingSourceSyncStatus {
+  NOT_SYNCED
+  CURRENT
+  STALE
+  FAILED
 }
 
 enum PermissionBasis {
@@ -191,6 +204,26 @@ enum SendAttemptOutcome {
   UNCERTAIN
 }
 
+enum WebhookReconciliationStatus {
+  RECEIVED
+  MATCHED
+  RETRY_PENDING
+  PROCESSED
+  DEAD_LETTER
+}
+
+enum AiGenerationKind {
+  LISTING_COPY
+  CAMPAIGN_COPY
+}
+
+enum AiGenerationStatus {
+  GENERATED
+  APPLIED
+  REJECTED
+  FAILED
+}
+
 enum JobStatus {
   PENDING
   RUNNING
@@ -206,6 +239,10 @@ enum JobType {
   RECOMPUTE_CAMPAIGN_STATS
   IMPORT_CONTACTS
   CLEANUP_EXPIRED_DATA
+  RECONCILE_WEBHOOK_EVENT
+  ONEKEY_INITIAL_SYNC
+  ONEKEY_DELTA_SYNC
+  ONEKEY_MEDIA_IMPORT
 }
 
 enum ImportStatus {
@@ -232,27 +269,29 @@ enum UnsubscribeSource {
 }
 
 model User {
-  id                   String           @id @default(uuid()) @db.Uuid
-  entraObjectId        String?          @unique @map("entra_object_id")
+  id                   String                   @id @default(uuid()) @db.Uuid
+  entraObjectId        String?                  @unique @map("entra_object_id")
   email                String
-  emailNormalized      String           @unique @map("email_normalized")
-  displayName          String?          @map("display_name")
-  role                 UserRole         @default(VIEWER)
-  isActive             Boolean          @default(true) @map("is_active")
-  lastLoginAt          DateTime?        @map("last_login_at") @db.Timestamptz(3)
-  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  emailNormalized      String                   @unique @map("email_normalized")
+  displayName          String?                  @map("display_name")
+  role                 UserRole                 @default(VIEWER)
+  isActive             Boolean                  @default(true) @map("is_active")
+  lastLoginAt          DateTime?                @map("last_login_at") @db.Timestamptz(3)
+  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
   agent                Agent?
-  createdListings      Listing[]        @relation("ListingCreatedBy")
-  updatedListings      Listing[]        @relation("ListingUpdatedBy")
-  createdAudiences     SavedAudience[]  @relation("AudienceCreatedBy")
-  updatedAudiences     SavedAudience[]  @relation("AudienceUpdatedBy")
-  createdCampaigns     Campaign[]       @relation("CampaignCreatedBy")
-  updatedCampaigns     Campaign[]       @relation("CampaignUpdatedBy")
-  releasedSuppressions Suppression[]    @relation("SuppressionReleasedBy")
+  createdListings      Listing[]                @relation("ListingCreatedBy")
+  updatedListings      Listing[]                @relation("ListingUpdatedBy")
+  createdAudiences     SavedAudience[]          @relation("AudienceCreatedBy")
+  updatedAudiences     SavedAudience[]          @relation("AudienceUpdatedBy")
+  createdCampaigns     Campaign[]               @relation("CampaignCreatedBy")
+  updatedCampaigns     Campaign[]               @relation("CampaignUpdatedBy")
+  releasedSuppressions Suppression[]            @relation("SuppressionReleasedBy")
   contactImports       ContactImport[]
   auditLogs            AuditLog[]
   testSends            TestSendRecord[]
+  aiGenerations        AiGeneration[]
+  manualReviewActions  ManualReviewResolution[]
 
   @@map("users")
 }
@@ -416,58 +455,69 @@ model Suppression {
 }
 
 model Listing {
-  id               String          @id @default(uuid()) @db.Uuid
-  internalName     String          @map("internal_name")
+  id               String                  @id @default(uuid()) @db.Uuid
+  internalName     String                  @map("internal_name")
   title            String
-  slug             String          @unique
-  status           ListingStatus   @default(DRAFT)
-  transactionType  TransactionType @map("transaction_type")
-  propertyType     PropertyType    @map("property_type")
-  addressLine1     String          @map("address_line_1")
-  addressLine2     String?         @map("address_line_2")
+  slug             String                  @unique
+  status           ListingStatus           @default(DRAFT)
+  transactionType  TransactionType         @map("transaction_type")
+  propertyType     PropertyType            @map("property_type")
+  addressLine1     String                  @map("address_line_1")
+  addressLine2     String?                 @map("address_line_2")
   city             String
-  stateCode        String          @map("state_code")
-  postalCode       String          @map("postal_code")
+  stateCode        String                  @map("state_code")
+  postalCode       String                  @map("postal_code")
   county           String?
-  marketText       String?         @map("market_text")
-  latitude         Decimal?        @db.Decimal(10, 7)
-  longitude        Decimal?        @db.Decimal(10, 7)
-  currency         String          @default("USD")
-  askingPrice      Decimal?        @map("asking_price") @db.Decimal(14, 2)
-  askingRentText   String?         @map("asking_rent_text")
-  buildingSqFt     Int?            @map("building_sq_ft")
-  lotSqFt          Decimal?        @map("lot_sq_ft") @db.Decimal(14, 2)
-  unitCount        Int?            @map("unit_count")
-  clearHeightFt    Decimal?        @map("clear_height_ft") @db.Decimal(6, 2)
-  loadingDocks     Int?            @map("loading_docks")
-  driveInDoors     Int?            @map("drive_in_doors")
-  parkingSpaces    Int?            @map("parking_spaces")
-  capRate          Decimal?        @map("cap_rate") @db.Decimal(7, 4)
+  marketText       String?                 @map("market_text")
+  latitude         Decimal?                @db.Decimal(10, 7)
+  longitude        Decimal?                @db.Decimal(10, 7)
+  currency         String                  @default("USD")
+  askingPrice      Decimal?                @map("asking_price") @db.Decimal(14, 2)
+  askingRentText   String?                 @map("asking_rent_text")
+  buildingSqFt     Int?                    @map("building_sq_ft")
+  lotSqFt          Decimal?                @map("lot_sq_ft") @db.Decimal(14, 2)
+  unitCount        Int?                    @map("unit_count")
+  clearHeightFt    Decimal?                @map("clear_height_ft") @db.Decimal(6, 2)
+  loadingDocks     Int?                    @map("loading_docks")
+  driveInDoors     Int?                    @map("drive_in_doors")
+  parkingSpaces    Int?                    @map("parking_spaces")
+  capRate          Decimal?                @map("cap_rate") @db.Decimal(7, 4)
   zoning           String?
-  yearBuilt        Int?            @map("year_built")
-  shortDescription String?         @map("short_description")
-  longDescription  String?         @map("long_description")
-  highlights       String[]        @default([])
-  listingUrl       String?         @map("listing_url")
-  brochureUrl      String?         @map("brochure_url")
-  virtualTourUrl   String?         @map("virtual_tour_url")
-  externalId       String?         @map("external_id")
-  mlsId            String?         @map("mls_id")
-  isExclusive      Boolean         @default(false) @map("is_exclusive")
-  priceUponRequest Boolean         @default(false) @map("price_upon_request")
+  yearBuilt        Int?                    @map("year_built")
+  shortDescription String?                 @map("short_description")
+  longDescription  String?                 @map("long_description")
+  highlights       String[]                @default([])
+  listingUrl       String?                 @map("listing_url")
+  brochureUrl      String?                 @map("brochure_url")
+  virtualTourUrl   String?                 @map("virtual_tour_url")
+  externalId       String?                 @map("external_id")
+  mlsId            String?                 @map("mls_id")
+  isExclusive      Boolean                 @default(false) @map("is_exclusive")
+  priceUponRequest Boolean                 @default(false) @map("price_upon_request")
   facts            Json?
-  agentId          String          @map("agent_id") @db.Uuid
-  createdByUserId  String          @map("created_by_user_id") @db.Uuid
-  updatedByUserId  String          @map("updated_by_user_id") @db.Uuid
-  publishedAt      DateTime?       @map("published_at") @db.Timestamptz(3)
-  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt        DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
-  agent            Agent           @relation(fields: [agentId], references: [id], onDelete: Restrict)
-  createdBy        User            @relation("ListingCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
-  updatedBy        User            @relation("ListingUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict)
+  source           ListingSource           @default(MANUAL)
+  sourceKey        String?                 @map("source_key")
+  sourceListingId  String?                 @map("source_listing_id")
+  sourceSystem     String?                 @map("source_system")
+  sourceModifiedAt DateTime?               @map("source_modified_at") @db.Timestamptz(3)
+  sourceSyncedAt   DateTime?               @map("source_synced_at") @db.Timestamptz(3)
+  sourceSyncStatus ListingSourceSyncStatus @default(NOT_SYNCED) @map("source_sync_status")
+  sourceSnapshot   Json?                   @map("source_snapshot")
+  sourceWarnings   Json?                   @map("source_warnings")
+  agentId          String                  @map("agent_id") @db.Uuid
+  createdByUserId  String                  @map("created_by_user_id") @db.Uuid
+  updatedByUserId  String                  @map("updated_by_user_id") @db.Uuid
+  publishedAt      DateTime?               @map("published_at") @db.Timestamptz(3)
+  createdAt        DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+  agent            Agent                   @relation(fields: [agentId], references: [id], onDelete: Restrict)
+  createdBy        User                    @relation("ListingCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  updatedBy        User                    @relation("ListingUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict)
   assets           ListingAsset[]
   campaigns        Campaign[]
+  aiGenerations    AiGeneration[]
 
+  @@unique([source, sourceKey])
   @@index([status, propertyType])
   @@index([city, stateCode])
   @@index([agentId])
@@ -600,6 +650,7 @@ model Campaign {
   recipients              CampaignRecipient[]
   sendBatches             SendBatch[]
   testSends               TestSendRecord[]
+  aiGenerations           AiGeneration[]
 
   @@index([status, scheduledAt])
   @@index([startedAt])
@@ -660,29 +711,30 @@ model CampaignRecipient {
 }
 
 model SendBatch {
-  id                   String              @id @default(uuid()) @db.Uuid
-  campaignId           String              @map("campaign_id") @db.Uuid
-  senderProfileId      String              @map("sender_profile_id") @db.Uuid
+  id                   String                   @id @default(uuid()) @db.Uuid
+  campaignId           String                   @map("campaign_id") @db.Uuid
+  senderProfileId      String                   @map("sender_profile_id") @db.Uuid
   status               SendBatchStatus
-  idempotencyKey       String              @unique @map("idempotency_key")
-  requestHash          String              @map("request_hash")
-  recipientCount       Int                 @map("recipient_count")
-  acceptedCount        Int                 @default(0) @map("accepted_count")
-  failedCount          Int                 @default(0) @map("failed_count")
-  attemptCount         Int                 @default(0) @map("attempt_count")
-  nextAttemptAt        DateTime?           @map("next_attempt_at") @db.Timestamptz(3)
-  idempotencyExpiresAt DateTime            @map("idempotency_expires_at") @db.Timestamptz(3)
-  startedAt            DateTime?           @map("started_at") @db.Timestamptz(3)
-  submittedAt          DateTime?           @map("submitted_at") @db.Timestamptz(3)
-  completedAt          DateTime?           @map("completed_at") @db.Timestamptz(3)
-  lastErrorCode        String?             @map("last_error_code")
-  lastErrorMessage     String?             @map("last_error_message")
-  createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
-  campaign             Campaign            @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  senderProfile        SenderProfile       @relation(fields: [senderProfileId], references: [id], onDelete: Restrict)
+  idempotencyKey       String                   @unique @map("idempotency_key")
+  requestHash          String                   @map("request_hash")
+  recipientCount       Int                      @map("recipient_count")
+  acceptedCount        Int                      @default(0) @map("accepted_count")
+  failedCount          Int                      @default(0) @map("failed_count")
+  attemptCount         Int                      @default(0) @map("attempt_count")
+  nextAttemptAt        DateTime?                @map("next_attempt_at") @db.Timestamptz(3)
+  idempotencyExpiresAt DateTime                 @map("idempotency_expires_at") @db.Timestamptz(3)
+  startedAt            DateTime?                @map("started_at") @db.Timestamptz(3)
+  submittedAt          DateTime?                @map("submitted_at") @db.Timestamptz(3)
+  completedAt          DateTime?                @map("completed_at") @db.Timestamptz(3)
+  lastErrorCode        String?                  @map("last_error_code")
+  lastErrorMessage     String?                  @map("last_error_message")
+  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+  campaign             Campaign                 @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  senderProfile        SenderProfile            @relation(fields: [senderProfileId], references: [id], onDelete: Restrict)
   recipients           CampaignRecipient[]
   attempts             SendAttempt[]
+  manualReviewActions  ManualReviewResolution[]
 
   @@index([campaignId, status])
   @@index([status])
@@ -714,22 +766,27 @@ model SendAttempt {
 }
 
 model EmailEvent {
-  id                  String             @id @default(uuid()) @db.Uuid
-  webhookId           String             @unique @map("webhook_id")
-  eventType           String             @map("event_type")
-  providerEmailId     String?            @map("provider_email_id")
-  recipientEmail      String?            @map("recipient_email")
-  eventCreatedAt      DateTime           @map("event_created_at") @db.Timestamptz(3)
-  campaignRecipientId String?            @map("campaign_recipient_id") @db.Uuid
-  payload             Json
-  processedAt         DateTime?          @map("processed_at") @db.Timestamptz(3)
-  processingError     String?            @map("processing_error")
-  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  campaignRecipient   CampaignRecipient? @relation(fields: [campaignRecipientId], references: [id], onDelete: SetNull)
+  id                     String                      @id @default(uuid()) @db.Uuid
+  webhookId              String                      @unique @map("webhook_id")
+  eventType              String                      @map("event_type")
+  providerEmailId        String?                     @map("provider_email_id")
+  recipientEmail         String?                     @map("recipient_email")
+  eventCreatedAt         DateTime                    @map("event_created_at") @db.Timestamptz(3)
+  campaignRecipientId    String?                     @map("campaign_recipient_id") @db.Uuid
+  payload                Json
+  processedAt            DateTime?                   @map("processed_at") @db.Timestamptz(3)
+  processingError        String?                     @map("processing_error")
+  reconciliationStatus   WebhookReconciliationStatus @default(RECEIVED) @map("reconciliation_status")
+  reconciliationAttempts Int                         @default(0) @map("reconciliation_attempts")
+  nextReconcileAt        DateTime?                   @map("next_reconcile_at") @db.Timestamptz(3)
+  deadLetteredAt         DateTime?                   @map("dead_lettered_at") @db.Timestamptz(3)
+  createdAt              DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+  campaignRecipient      CampaignRecipient?          @relation(fields: [campaignRecipientId], references: [id], onDelete: SetNull)
 
   @@index([providerEmailId])
   @@index([campaignRecipientId, eventCreatedAt])
   @@index([processedAt, createdAt])
+  @@index([reconciliationStatus, nextReconcileAt])
   @@map("email_events")
 }
 
@@ -859,6 +916,8 @@ model TestSendRecord {
   templateVersion String   @map("template_version")
   providerEmailId String?  @map("provider_email_id")
   success         Boolean
+  idempotencyKey  String   @unique @map("idempotency_key")
+  clientRequestId String   @map("client_request_id")
   createdByUserId String   @map("created_by_user_id") @db.Uuid
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   campaign        Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
@@ -866,4 +925,89 @@ model TestSendRecord {
 
   @@index([campaignId, campaignVersion, createdAt])
   @@map("test_send_records")
+}
+
+model ExternalSyncCursor {
+  provider        String    @id
+  cursor          String?
+  lastStartedAt   DateTime? @map("last_started_at") @db.Timestamptz(3)
+  lastSucceededAt DateTime? @map("last_succeeded_at") @db.Timestamptz(3)
+  lastError       String?   @map("last_error")
+  recordsSynced   Int       @default(0) @map("records_synced")
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("external_sync_cursors")
+}
+
+model OneKeyListingIndex {
+  sourceKey             String   @id @map("source_key")
+  listingId             String?  @map("listing_id")
+  normalizedAddress     String   @map("normalized_address")
+  unparsedAddress       String   @map("unparsed_address")
+  city                  String
+  stateCode             String   @map("state_code")
+  postalCode            String   @map("postal_code")
+  county                String?
+  standardStatus        String?  @map("standard_status")
+  propertyType          String?  @map("property_type")
+  propertySubType       String?  @map("property_sub_type")
+  listPrice             Decimal? @map("list_price") @db.Decimal(14, 2)
+  bedroomsTotal         Int?     @map("bedrooms_total")
+  bathroomsTotalInteger Int?     @map("bathrooms_total_integer")
+  livingArea            Decimal? @map("living_area") @db.Decimal(14, 2)
+  yearBuilt             Int?     @map("year_built")
+  publicRemarks         String?  @map("public_remarks")
+  listAgentFullName     String?  @map("list_agent_full_name")
+  listOfficeName        String?  @map("list_office_name")
+  imageUrls             String[] @default([]) @map("image_urls")
+  sourceModifiedAt      DateTime? @map("source_modified_at") @db.Timestamptz(3)
+  sourceSnapshot        Json     @map("source_snapshot")
+  syncedAt              DateTime @default(now()) @map("synced_at") @db.Timestamptz(3)
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([listingId])
+  @@index([normalizedAddress])
+  @@index([postalCode, standardStatus])
+  @@index([sourceModifiedAt])
+  @@map("onekey_listing_index")
+}
+
+model AiGeneration {
+  id              String             @id @default(uuid()) @db.Uuid
+  kind            AiGenerationKind
+  status          AiGenerationStatus @default(GENERATED)
+  listingId       String?            @map("listing_id") @db.Uuid
+  campaignId      String?            @map("campaign_id") @db.Uuid
+  provider        String
+  model           String
+  tone            String
+  inputFactsHash  String             @map("input_facts_hash")
+  proposal        Json
+  appliedFields   String[]           @default([]) @map("applied_fields")
+  createdByUserId String             @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  appliedAt       DateTime?          @map("applied_at") @db.Timestamptz(3)
+  listing         Listing?           @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  campaign        Campaign?          @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  createdBy       User               @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([listingId, createdAt])
+  @@index([campaignId, createdAt])
+  @@map("ai_generations")
+}
+
+model ManualReviewResolution {
+  id              String    @id @default(uuid()) @db.Uuid
+  sendBatchId     String    @map("send_batch_id") @db.Uuid
+  action          String
+  reason          String
+  providerEmailId String?   @map("provider_email_id")
+  quotaReleased   Int       @default(0) @map("quota_released")
+  createdByUserId String    @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  sendBatch       SendBatch @relation(fields: [sendBatchId], references: [id], onDelete: Cascade)
+  createdBy       User      @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([sendBatchId, createdAt])
+  @@map("manual_review_resolutions")
 }

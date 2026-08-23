@@ -27,9 +27,9 @@ Copy, do not edit, the tracked example, then fill the printed tenant/client IDs:
 cp infra/dev.example.bicepparam infra/dev.local.bicepparam
 ```
 
-`*.local.bicepparam` is ignored. Fill tenant/client IDs, admin emails and stable base URL. Do not put PostgreSQL, Resend or Entra secrets in the file.
+`*.local.bicepparam` is ignored. Fill tenant/client IDs, admin emails and stable base URL. Leave `emailDeliveryMode`, `oneKeyProvider` and `aiProvider` disabled for the first deployment. Do not put PostgreSQL, Resend, BBO/MLS, OpenAI or Entra secrets in the file.
 
-Required external inputs are Azure subscription/tenant/resource groups, Entra app ID and allowed users, `marketing.homixny.com`, Resend domain/API/Webhook values, legal postal address, alert recipient, deployment tier/HA and optional brand assets.
+Required external inputs are Azure subscription/tenant/resource groups, Entra app ID and allowed users, `marketing.homixny.com`, Resend domain/API/Webhook values, BBO read-only marketing API base/key (and MLS Grid token only if the data-ingestion boundary later requires it), a dedicated OpenAI project/key, legal postal address, alert recipient, deployment tier/HA and optional brand assets.
 
 ## Validate without deploying
 
@@ -58,7 +58,7 @@ For production use `--environment prod`, the production resource group and a loc
 1. deploys `infra/bootstrap.bicep` at subscription scope to create the resource group and ACR;
 2. builds `homix-marketing:<git-sha>` in ACR;
 3. generates a PostgreSQL password in memory unless `HOMIX_POSTGRES_ADMIN_PASSWORD` is set;
-4. deploys `infra/main.bicep` with delivery and optional provider/Entra secret references disabled, while storing the generated database/session secrets in Key Vault;
+4. deploys `infra/main.bicep` with delivery, OneKey and AI providers plus optional provider/Entra secret references disabled, while storing generated database/session/unsubscribe secrets in Key Vault;
 5. starts and waits for the migration job, which applies Prisma migrations and the idempotent production seed;
 6. verifies public readiness and observes a database-backed Worker heartbeat before printing only non-secret resource names.
 
@@ -89,7 +89,13 @@ Create secrets with the interactive ARM control-plane helper; values are read wi
 ```bash
 ./scripts/set-key-vault-secret.sh rg-homix-mkt-prod-eastus2 REQUIRED_KEY_VAULT_NAME resend-api-key
 ./scripts/set-key-vault-secret.sh rg-homix-mkt-prod-eastus2 REQUIRED_KEY_VAULT_NAME resend-webhook-secret
+./scripts/set-key-vault-secret.sh rg-homix-mkt-prod-eastus2 REQUIRED_KEY_VAULT_NAME unsubscribe-signing-secret
+./scripts/set-key-vault-secret.sh rg-homix-mkt-prod-eastus2 REQUIRED_KEY_VAULT_NAME bbo-marketing-api-key
+./scripts/set-key-vault-secret.sh rg-homix-mkt-prod-eastus2 REQUIRED_KEY_VAULT_NAME mls-grid-access-token
+./scripts/set-key-vault-secret.sh rg-homix-mkt-prod-eastus2 REQUIRED_KEY_VAULT_NAME openai-api-key
 ```
+
+Use a BBO key dedicated to this application with only `marketing:read` and required listing/event read scopes. `mls-grid-access-token` is wired for a future/direct licensed replication boundary but the current Homix integration uses the compliant BBO API. Create the OpenAI key in a dedicated Homix Marketing project. All are server-only Container Apps Key Vault references.
 
 Configure Resend Webhook URL:
 
@@ -98,6 +104,25 @@ https://marketing.homixny.com/api/public/webhooks/resend
 ```
 
 Subscribe to sent/delivered/delivery-delayed/failed/bounced/complained/suppressed/opened/clicked events. For rotation, write the old value as `resend-webhook-previous-secret`, deploy with `USE_PREVIOUS_RESEND_WEBHOOK_SECRET=true` plus an ISO `RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT`, then set the flag false after the overlap and verification.
+
+For unsubscribe rotation, write the old value as `unsubscribe-previous-signing-secret`, write the new current `unsubscribe-signing-secret`, and deploy with `USE_PREVIOUS_UNSUBSCRIBE_SIGNING_SECRET=true` plus `UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET_EXPIRES_AT`. Disable the previous reference after the overlap. This secret is never shared with `SESSION_SECRET`.
+
+## Enable OneKey and AI while delivery stays disabled
+
+After their Key Vault secrets exist, configure GitHub Environment variables and deploy a new revision:
+
+```text
+EMAIL_DELIVERY_MODE=disabled
+ONEKEY_PROVIDER=bbo
+BBO_LISTING_API_BASE_URL=https://REQUIRED_BBO_HOST
+USE_BBO_MARKETING_API_KEY=true
+ONEKEY_SYNC_ENABLED=true
+AI_PROVIDER=openai
+USE_OPENAI_API_KEY=true
+OPENAI_MODEL=gpt-5-mini
+```
+
+In Settings, Test Connection, run the initial sync, verify MLS-number and address search/import/refresh/media/recipient preview, then generate and selectively apply listing and Campaign copy. A OneKey or AI failure is noncritical to `/health/ready`; manual listing/campaign work remains available. Keep delivery disabled until these checks pass.
 
 ## DNS and custom domain
 
@@ -138,6 +163,16 @@ STORAGE_SKU_NAME
 USE_RESEND_SECRETS
 USE_PREVIOUS_RESEND_WEBHOOK_SECRET
 RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT
+USE_PREVIOUS_UNSUBSCRIBE_SIGNING_SECRET
+UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET_EXPIRES_AT
+ONEKEY_PROVIDER
+BBO_LISTING_API_BASE_URL
+USE_BBO_MARKETING_API_KEY
+USE_MLS_GRID_ACCESS_TOKEN
+ONEKEY_SYNC_ENABLED
+AI_PROVIDER
+USE_OPENAI_API_KEY
+OPENAI_MODEL
 USE_ENTRA_CLIENT_SECRET
 EMAIL_DELIVERY_MODE
 ```
@@ -164,6 +199,9 @@ export STORAGE_SKU_NAME=Standard_LRS
 export USE_RESEND_SECRETS=true
 export USE_ENTRA_CLIENT_SECRET=true
 export EMAIL_DELIVERY_MODE=disabled
+export ONEKEY_PROVIDER=disabled
+export ONEKEY_SYNC_ENABLED=false
+export AI_PROVIDER=disabled
 
 ./scripts/deploy-release.sh \
   rg-homix-mkt-prod-eastus2 \

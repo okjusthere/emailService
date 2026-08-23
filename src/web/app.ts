@@ -1,4 +1,3 @@
-import cookieParser from "cookie-parser";
 import express from "express";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
@@ -75,8 +74,6 @@ export function createApp() {
   app.post("/api/public/webhooks/resend", express.raw({ type: "application/json", limit: "1mb" }));
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ extended: false, limit: "64kb" }));
-  app.use(cookieParser());
-
   app.get("/health/live", (_req, res) => {
     res.json({ status: "ok", role: config.appRole, version: "2.0.0", commitSha: config.commitSha });
   });
@@ -108,15 +105,12 @@ export function createApp() {
         setHeaders: (res) => res.setHeader("X-Content-Type-Options", "nosniff"),
       })
     );
-  app.use("/api/v2", requireCsrf, localDevLoginRouter);
   app.use(
     "/api/v2",
-    authenticate,
-    requireCsrf,
-    rateLimit({ windowMs: 15 * 60_000, limit: 2_000, standardHeaders: true, legacyHeaders: false }),
-    mutationAudit,
-    v2Router
+    rateLimit({ windowMs: 15 * 60_000, limit: 2_000, standardHeaders: true, legacyHeaders: false })
   );
+  app.use("/api/v2", requireCsrf, localDevLoginRouter);
+  app.use("/api/v2", authenticate, requireCsrf, mutationAudit, v2Router);
 
   const clientDir = path.join(process.cwd(), "dist", "client");
   app.use(

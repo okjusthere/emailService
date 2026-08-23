@@ -10,26 +10,52 @@ All `/api/v2/*` requests require a user. Mutations using cookie auth require the
 
 ## Main resources
 
-| Area        | Representative operations                                                         |
-| ----------- | --------------------------------------------------------------------------------- |
-| Auth/users  | `GET /auth/me`, user list/create/role update                                      |
-| Agents      | list/create/get/update/deactivate                                                 |
-| Contacts    | cursor list, CRUD/archive/restore, bulk update, formula-safe CSV export           |
-| Imports     | multipart upload, validate, apply, status, error CSV                              |
-| Reference   | tags, market hierarchy, property interests                                        |
-| Suppression | list/manual add/Admin release                                                     |
-| Listings    | cursor list, CRUD/duplicate/archive, multipart assets/reorder/delete              |
-| Audiences   | estimate, saved CRUD/duplicate                                                    |
-| Senders     | CRUD, verification/suspension, quota                                              |
-| Campaigns   | list/detail/update/duplicate/preview/test/ready/schedule/send/pause/resume/cancel |
-| Reporting   | campaign stats/recipients/events/export, dashboard, audit                         |
-| Operations  | readiness, global pause/resume with reason/recovery confirmation                  |
+| Area        | Representative operations                                                                  |
+| ----------- | ------------------------------------------------------------------------------------------ |
+| Auth/users  | `GET /auth/me`, user list/create/role update                                               |
+| Agents      | list/create/get/update/deactivate                                                          |
+| Contacts    | cursor list, CRUD/archive/restore, bulk update, formula-safe CSV export                    |
+| Imports     | multipart upload, validate, apply, status, error CSV                                       |
+| Reference   | tags, market hierarchy, property interests                                                 |
+| Suppression | list/manual add/Admin release                                                              |
+| Listings    | cursor list, CRUD/duplicate/archive, multipart assets/reorder/delete, source refresh       |
+| OneKey      | status/test/sync, MLS/address search, review/import, media retry, recipient preview/import |
+| AI copy     | status, listing/campaign proposal generation and explicit selected-field apply             |
+| Audiences   | estimate, saved CRUD/duplicate                                                             |
+| Senders     | full CRUD, verification/reactivation/suspension/default selection, quota                   |
+| Campaigns   | list/detail/update/duplicate/preview/test/ready/schedule/send/pause/resume/cancel          |
+| Reporting   | campaign stats/recipients/events/export, dashboard, audit                                  |
+| Operations  | readiness, global pause/resume, Webhook reconciliation/dead letters, manual review         |
 
 Contacts, listings and campaigns support `limit` plus opaque UUID `cursor` pagination; responses include `nextCursor`. Existing page parameters remain accepted on report/reference endpoints where offset navigation is sufficient. Contact filters cover type/source/permission/status/tag/market/property-interest/suppression and safe sort fields; listing filters cover status/property/transaction/agent; campaign recipients and their CSV export accept send/delivery state filters. Filters are enumerated and validated by Zod.
 
 CSV import is an explicit four-step flow: upload and inspect headers/masked preview, submit a canonical-field-to-header mapping, review invalid/duplicate/suppressed counts and unknown references, then apply. Unknown tags, markets or property interests are not created unless the apply request explicitly sets `confirmCreateUnknownReferences`.
 
 Campaign mutations that can be retried use explicit idempotency or optimistic concurrency: draft updates check version; send-now accepts a client idempotency key and reuses the durable dispatch job/snapshot instead of duplicating recipients.
+
+Test send requires a client-generated UUID `clientRequestId`. Its idempotency identity includes campaign/version, actor, normalized-recipient hash and that UUID. Retrying a failed HTTP request with the same UUID is safe; creating a new UUID intentionally sends another test.
+
+## OneKey/BBO and AI endpoints
+
+```text
+GET  /api/v2/onekey/status
+POST /api/v2/onekey/test
+POST /api/v2/onekey/sync/{initial|delta|rebuild}
+GET  /api/v2/onekey/listings/search?q=MLS_OR_ADDRESS
+GET  /api/v2/onekey/listings/{sourceKey}
+POST /api/v2/onekey/listings/{sourceKey}/import
+POST /api/v2/listings/{id}/onekey/refresh
+POST /api/v2/listings/{id}/onekey/media/retry
+GET  /api/v2/onekey/listings/{sourceKey}/recipients
+POST /api/v2/listings/{id}/onekey/recipients/import
+GET  /api/v2/ai/status
+POST /api/v2/listings/{id}/ai/{generate|apply}
+POST /api/v2/campaigns/{id}/ai/{generate|apply}
+```
+
+Search reads the local PostgreSQL OneKey index first, then the configured provider. Import is idempotent by `(source, sourceKey)` and never applies a listing-office ownership gate. Recipient candidate parameters are bounded: `nearbyZipCount` 0–5, `closedMonths` 12–24 and `limit` 1–5000. Candidate creation is a separate, confirmed mutation and creates a saved audience; preview alone never writes contacts.
+
+The production adapter calls BBO server-to-server with a bearer key. The token and raw provider responses are never returned. AI generation stores model, provider, fact hash and proposal; only enumerated selected fields are applied, and no endpoint passes contacts, recipients or secrets to the AI provider.
 
 ## Public endpoints
 
