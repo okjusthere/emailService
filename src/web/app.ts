@@ -1,4 +1,3 @@
-import cookieParser from "cookie-parser";
 import express from "express";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
@@ -75,8 +74,6 @@ export function createApp() {
   app.post("/api/public/webhooks/resend", express.raw({ type: "application/json", limit: "1mb" }));
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ extended: false, limit: "64kb" }));
-  app.use(cookieParser());
-
   app.get("/health/live", (_req, res) => {
     res.json({ status: "ok", role: config.appRole, version: "2.0.0", commitSha: config.commitSha });
   });
