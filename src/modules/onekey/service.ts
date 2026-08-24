@@ -6,6 +6,7 @@ import { processAndStoreAsset } from "../assets/service.js";
 import type { ActorContext } from "../audit/service.js";
 import { writeAudit } from "../audit/service.js";
 import { getOneKeyProvider, type OneKeyListing } from "../../integrations/onekey/index.js";
+import { isAllowedOneKeyMediaUrl } from "../../integrations/onekey/mediaPolicy.js";
 import { normalizeAddress } from "../../integrations/onekey/normalize.js";
 import { DomainError } from "../../shared/errors.js";
 import { normalizeEmail } from "../../shared/normalize.js";
@@ -429,16 +430,16 @@ export async function importOneKeyRecipients(
   return { ...result, selection: candidates };
 }
 
-function allowedMediaURL(raw: string) {
-  const url = new URL(raw);
-  if (url.protocol !== "https:" && !(config.nodeEnv !== "production" && url.protocol === "http:"))
-    return false;
-  if (config.oneKeyProvider !== "bbo") return config.nodeEnv !== "production";
-  return url.origin === new URL(config.bboListingApiBaseUrl).origin;
-}
-
 async function downloadMedia(url: string) {
-  if (!allowedMediaURL(url)) throw new Error("Media URL origin is not approved");
+  if (
+    !isAllowedOneKeyMediaUrl(url, {
+      nodeEnv: config.nodeEnv,
+      provider: config.oneKeyProvider,
+      bboListingApiBaseUrl: config.bboListingApiBaseUrl,
+      allowedOrigins: config.oneKeyMediaAllowedOrigins,
+    })
+  )
+    throw new Error("Media URL origin is not approved");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.aiRequestTimeoutMs);
   try {

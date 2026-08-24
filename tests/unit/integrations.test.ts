@@ -6,10 +6,27 @@ import {
   normalizeAddress,
   normalizeOneKeyListing,
 } from "../../src/integrations/onekey/normalize.js";
+import { isAllowedOneKeyMediaUrl } from "../../src/integrations/onekey/mediaPolicy.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("OneKey provider boundary", () => {
+  it("allows only explicitly configured BBO media origins in production", () => {
+    const policy = {
+      nodeEnv: "production" as const,
+      provider: "bbo" as const,
+      bboListingApiBaseUrl: "https://onekey.kevv.ai/api/v1",
+      allowedOrigins: ["https://onekeymls.kevv.ai"],
+    };
+    expect(isAllowedOneKeyMediaUrl("https://onekey.kevv.ai/media/1.jpg", policy)).toBe(true);
+    expect(isAllowedOneKeyMediaUrl("https://onekeymls.kevv.ai/media/1.jpg", policy)).toBe(true);
+    expect(isAllowedOneKeyMediaUrl("https://onekeymls.kevv.ai.evil.test/media/1.jpg", policy)).toBe(
+      false
+    );
+    expect(isAllowedOneKeyMediaUrl("http://onekeymls.kevv.ai/media/1.jpg", policy)).toBe(false);
+    expect(isAllowedOneKeyMediaUrl("javascript:alert(1)", policy)).toBe(false);
+  });
+
   it("normalizes BBO listing DTOs and stable address text", () => {
     expect(normalizeAddress("136-20 Roosevelt Avenue, Flushing, NY")).toBe(
       "136 20 roosevelt ave flushing ny"
