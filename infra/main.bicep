@@ -410,7 +410,7 @@ resource webAuth 'Microsoft.App/containerApps/authConfigs@2024-03-01' = {
     platform: { enabled: true }
     globalValidation: { unauthenticatedClientAction: 'RedirectToLoginPage', redirectToProvider: 'azureactivedirectory', excludedPaths: publicPaths }
     identityProviders: { azureActiveDirectory: { enabled: true, registration: union({ clientId: entraClientId, openIdIssuer: '${az.environment().authentication.loginEndpoint}${entraTenantId}/v2.0' }, useEntraClientSecret ? { clientSecretSettingName: 'entra-client-secret' } : {}) } }
-    login: { preserveUrlFragmentsForLogins: false }
+    login: { allowedExternalRedirectUrls: [baseUrl], preserveUrlFragmentsForLogins: false }
     httpSettings: { requireHttps: true, routes: { apiPrefix: '/.auth' }, forwardProxy: { convention: 'Standard' } }
   }
 }

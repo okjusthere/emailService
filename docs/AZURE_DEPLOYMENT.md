@@ -142,6 +142,8 @@ First verify `updates.homixny.com` in Resend and publish its current SPF/DKIM/Re
 
 The script prints the required CNAME/TXT, waits for operator confirmation, verifies DNS, provisions an Azure managed certificate, binds it and performs an HTTPS health check. If managed-certificate issuance is unavailable, upload an organization-approved PFX with `az containerapp env certificate upload --resource-group REQUIRED_RESOURCE_GROUP --name REQUIRED_ENVIRONMENT --certificate-file REQUIRED_PFX --certificate-password`, capture its resource ID, then run `az containerapp hostname bind ... --certificate REQUIRED_CERTIFICATE_ID`. Keep the PFX/password outside the repository and shell history. Set `BASE_URL` to the final domain before sandbox/live sending.
 
+The same `BASE_URL` is also registered in Container Apps Easy Auth as an allowed external redirect URL. This is required for the server-directed authentication cookie to authorize same-origin browser mutations from the custom domain; verify both an authenticated `GET /api/v2/auth/me` and an authenticated campaign-preview `POST` after binding or changing the domain.
+
 Azure Monitor must also alert on the structured log events `Job failed`, `deliverability_threshold_exceeded` and `batch_failed`, plus absence of `Worker heartbeat updated` for ten minutes and repeated `/health/ready` failures. Route those scheduled-query alerts to the same action group created by `alertEmail`; the exact KQL fields should first be confirmed against one deployment's `ContainerAppConsoleLogs_CL` schema because Azure workspace column names vary by ingestion mode.
 
 ## GitHub OIDC
