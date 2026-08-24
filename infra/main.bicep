@@ -138,6 +138,7 @@ var commonEnv = concat([
   { name: 'EMAIL_PROVIDER', value: 'resend' }
   { name: 'EMAIL_DELIVERY_MODE', value: emailDeliveryMode }
   { name: 'STORAGE_PROVIDER', value: 'azure' }
+  { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
   { name: 'AZURE_STORAGE_ACCOUNT_URL', value: 'https://${storage.name}.blob.${az.environment().suffixes.storage}' }
   { name: 'AZURE_STORAGE_CONTAINER', value: 'marketing-assets' }
   { name: 'AZURE_PRIVATE_CONTAINER', value: 'private-exports' }
