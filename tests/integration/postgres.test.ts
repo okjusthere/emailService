@@ -15,7 +15,9 @@ import {
   createCampaign,
   listCampaigns,
   markCampaignReady,
+  publishCampaign,
   previewCampaign,
+  quickStartCampaign,
   queueCampaignSnapshot,
   snapshotCampaign,
   testSendCampaign,
@@ -35,6 +37,7 @@ import {
   validateContactImport,
 } from "../../src/modules/imports/service.js";
 import { upsertSuppression } from "../../src/modules/suppressions/domain.js";
+import { configureCampaignOneKeyRecipients } from "../../src/modules/onekey/service.js";
 import { getPrivateObjectStorage } from "../../src/storage/PrivateObjectStorage.js";
 import { completeClaimedJob, failClaimedJob } from "../../src/worker/jobRunner.js";
 import { seedDatabase } from "../../prisma/seedData.js";
@@ -744,7 +747,6 @@ describe("PostgreSQL delivery invariants", () => {
           where: { uniqueKey: `SNAPSHOT_CAMPAIGN/${fixture.campaign.id}/integrationqueue` },
         })
       ).toBe(1);
-
       const scheduled = await snapshotCampaign(
         fixture.campaign.id,
         testActor(),
@@ -792,6 +794,259 @@ describe("PostgreSQL delivery invariants", () => {
       mutableConfig.testAllowlist = originalAllowlist;
       mutableConfig.aiProvider = originalAiProvider;
       setEmailProviderForTest(undefined);
+    }
+  });
+
+  it("rejects publish when every matching recipient is ineligible", async () => {
+    const fixture = await createRenderableCampaign();
+    const filter = fixture.campaign.audienceFilter as { includeContactIds: string[] };
+    await prisma.contact.updateMany({
+      where: { id: { in: filter.includeContactIds } },
+      data: { permissionBasis: "UNKNOWN" },
+    });
+    const mutableConfig = config as {
+      deliveryMode: "disabled" | "sandbox" | "live";
+      testAllowlist: string[];
+    };
+    const originalMode = mutableConfig.deliveryMode;
+    const originalAllowlist = mutableConfig.testAllowlist;
+    try {
+      mutableConfig.deliveryMode = "sandbox";
+      mutableConfig.testAllowlist = ["admin@homixny.com"];
+      setEmailProviderForTest(new FakeEmailProvider());
+      await testSendCampaign(
+        fixture.campaign.id,
+        "admin@homixny.com",
+        fixture.campaign.version,
+        randomUUID(),
+        testActor()
+      );
+      await expect(
+        publishCampaign(
+          fixture.campaign.id,
+          testActor(),
+          fixture.campaign.version,
+          undefined,
+          "all-ineligible-publish"
+        )
+      ).rejects.toMatchObject({ code: "AUDIENCE_EMPTY" });
+      await expect(
+        prisma.campaign.findUniqueOrThrow({ where: { id: fixture.campaign.id } })
+      ).resolves.toMatchObject({ status: "DRAFT" });
+    } finally {
+      mutableConfig.deliveryMode = originalMode;
+      mutableConfig.testAllowlist = originalAllowlist;
+      setEmailProviderForTest(undefined);
+    }
+  });
+
+  it("keeps reusable audiences isolated and reports unknown OneKey permissions", async () => {
+    const fixture = await createRenderableCampaign();
+    const shared = await prisma.savedAudience.create({
+      data: {
+        name: "Reusable brokers",
+        filter: { contactTypes: ["BROKER"], requireKnownPermissionBasis: true },
+        lastEstimatedCount: 99,
+        createdByUserId: actorId,
+        updatedByUserId: actorId,
+      },
+    });
+    await prisma.$transaction([
+      prisma.listing.update({
+        where: { id: fixture.listing.id },
+        data: { source: "ONEKEY", sourceKey: `KEY-${randomUUID()}` },
+      }),
+      prisma.campaign.update({
+        where: { id: fixture.campaign.id },
+        data: { savedAudienceId: shared.id },
+      }),
+      prisma.contact.create({
+        data: {
+          email: "external-agent@example.com",
+          emailNormalized: "external-agent@example.com",
+          sourceType: "MANUAL",
+          permissionBasis: "UNKNOWN",
+          contactType: "BROKER",
+        },
+      }),
+    ]);
+    const result = await configureCampaignOneKeyRecipients(
+      fixture.campaign.id,
+      {
+        version: fixture.campaign.version,
+        nearbyZipCount: 3,
+        closedMonths: 12,
+        limit: 2000,
+        excludeEmailedWithinDays: 14,
+      },
+      testActor()
+    );
+    expect(result.summary).toMatchObject({ matched: 1, eligible: 0, unknownPermission: 1 });
+    expect(result.audience.id).not.toBe(shared.id);
+    await expect(
+      prisma.savedAudience.findUniqueOrThrow({ where: { id: shared.id } })
+    ).resolves.toMatchObject({ name: "Reusable brokers", lastEstimatedCount: 99 });
+    expect(result.audience.lastEstimatedCount).toBe(0);
+  });
+
+  it("reuses quick-start drafts and atomically publishes a tested version", async () => {
+    const fixture = await createRenderableCampaign();
+    const first = await quickStartCampaign(fixture.listing.id, testActor());
+    const second = await quickStartCampaign(fixture.listing.id, testActor());
+    expect(first).toMatchObject({
+      created: false,
+      campaign: { id: fixture.campaign.id },
+      defaults: { senderResolved: true, replyToResolved: true, templateResolved: true },
+    });
+    expect(second).toMatchObject({ created: false, campaign: { id: fixture.campaign.id } });
+
+    const mutableConfig = config as {
+      deliveryMode: "disabled" | "sandbox" | "live";
+      testAllowlist: string[];
+    };
+    const originalMode = mutableConfig.deliveryMode;
+    const originalAllowlist = mutableConfig.testAllowlist;
+    try {
+      mutableConfig.deliveryMode = "sandbox";
+      mutableConfig.testAllowlist = ["admin@homixny.com"];
+      await prisma.listing.update({
+        where: { id: fixture.listing.id },
+        data: { status: "DRAFT", publishedAt: null },
+      });
+      setEmailProviderForTest(new FakeEmailProvider());
+      await expect(
+        publishCampaign(
+          fixture.campaign.id,
+          testActor(),
+          fixture.campaign.version,
+          undefined,
+          "simplified-untested-publish"
+        )
+      ).rejects.toMatchObject({ code: "CURRENT_TEST_SEND_REQUIRED" });
+      await testSendCampaign(
+        fixture.campaign.id,
+        "admin@homixny.com",
+        fixture.campaign.version,
+        randomUUID(),
+        testActor()
+      );
+      await expect(
+        publishCampaign(
+          fixture.campaign.id,
+          testActor(),
+          fixture.campaign.version + 1,
+          undefined,
+          "simplified-stale-publish"
+        )
+      ).rejects.toMatchObject({ code: "CAMPAIGN_VERSION_CONFLICT" });
+      const queued = await publishCampaign(
+        fixture.campaign.id,
+        testActor(),
+        fixture.campaign.version,
+        undefined,
+        "simplified-publish"
+      );
+      expect(queued.status).toBe("SNAPSHOTTING");
+      await expect(
+        prisma.listing.findUnique({ where: { id: fixture.listing.id } })
+      ).resolves.toMatchObject({ status: "ACTIVE" });
+      await expect(
+        publishCampaign(
+          fixture.campaign.id,
+          testActor(),
+          fixture.campaign.version,
+          undefined,
+          "simplified-publish"
+        )
+      ).resolves.toMatchObject({ status: "SNAPSHOTTING" });
+      expect(
+        await prisma.job.count({
+          where: {
+            uniqueKey: `SNAPSHOT_CAMPAIGN/${fixture.campaign.id}/simplified-publish`,
+          },
+        })
+      ).toBe(1);
+      await prisma.$transaction([
+        prisma.campaign.update({
+          where: { id: fixture.campaign.id },
+          data: { status: "READY" },
+        }),
+        prisma.job.update({
+          where: {
+            uniqueKey: `SNAPSHOT_CAMPAIGN/${fixture.campaign.id}/simplified-publish`,
+          },
+          data: {
+            status: "FAILED",
+            attempts: 3,
+            lastError: "temporary failure",
+            completedAt: new Date(),
+          },
+        }),
+      ]);
+      await expect(
+        publishCampaign(
+          fixture.campaign.id,
+          testActor(),
+          fixture.campaign.version,
+          undefined,
+          "simplified-publish"
+        )
+      ).resolves.toMatchObject({ status: "SNAPSHOTTING" });
+      await expect(
+        prisma.job.findUniqueOrThrow({
+          where: {
+            uniqueKey: `SNAPSHOT_CAMPAIGN/${fixture.campaign.id}/simplified-publish`,
+          },
+        })
+      ).resolves.toMatchObject({ status: "PENDING", attempts: 0, lastError: null });
+    } finally {
+      mutableConfig.deliveryMode = originalMode;
+      mutableConfig.testAllowlist = originalAllowlist;
+      setEmailProviderForTest(undefined);
+    }
+  });
+
+  it("creates a safe quick-start draft when no recent draft exists", async () => {
+    const fixture = await createRenderableCampaign();
+    await prisma.campaign.delete({ where: { id: fixture.campaign.id } });
+
+    const result = await quickStartCampaign(fixture.listing.id, testActor());
+
+    expect(result).toMatchObject({
+      created: true,
+      campaign: {
+        listingId: fixture.listing.id,
+        replyToAgentId: fixture.agent.id,
+        status: "DRAFT",
+        templateKey: "LISTING_BRANDED",
+        ctaUrl: "https://homixny.com/listings/integration",
+      },
+      defaults: { senderResolved: true, replyToResolved: true, templateResolved: true },
+    });
+    expect(result.campaign.name).toMatch(/^10 Main Street · \d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("returns an actionable quick-start error when no verified active sender exists", async () => {
+    const fixture = await createRenderableCampaign();
+    await prisma.campaign.delete({ where: { id: fixture.campaign.id } });
+    const activeVerified = await prisma.senderProfile.findMany({
+      where: { isActive: true, verificationStatus: "VERIFIED" },
+      select: { id: true },
+    });
+    try {
+      await prisma.senderProfile.updateMany({
+        where: { id: { in: activeVerified.map((item) => item.id) } },
+        data: { isActive: false },
+      });
+      await expect(quickStartCampaign(fixture.listing.id, testActor())).rejects.toMatchObject({
+        code: "VERIFIED_SENDER_REQUIRED",
+        message: "No verified sender is configured. Ask an admin to configure the From address.",
+      });
+    } finally {
+      await prisma.senderProfile.updateMany({
+        where: { id: { in: activeVerified.map((item) => item.id) } },
+        data: { isActive: true },
+      });
     }
   });
 

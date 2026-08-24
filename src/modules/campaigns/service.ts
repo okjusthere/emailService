@@ -239,6 +239,100 @@ export async function createCampaign(body: unknown, actor: ActorContext) {
   });
 }
 
+const QUICK_START_REUSE_HOURS = 24;
+
+function quickStartName(address: string, now = new Date()) {
+  const date = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+  return `${address} · ${date}`.slice(0, 200);
+}
+
+export async function quickStartCampaign(listingId: string, actor: ActorContext) {
+  return inTransaction(async (tx) => {
+    const lockKey = `quick-start:${actor.userId}:${listingId}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+    const listing = await tx.listing.findUnique({
+      where: { id: listingId },
+      include: { agent: true },
+    });
+    if (!listing) throw new DomainError("LISTING_NOT_FOUND", "Listing not found.", 404);
+
+    const recent = await tx.campaign.findFirst({
+      where: {
+        listingId,
+        createdByUserId: actor.userId,
+        status: "DRAFT",
+        updatedAt: { gte: new Date(Date.now() - QUICK_START_REUSE_HOURS * 3_600_000) },
+      },
+      orderBy: { updatedAt: "desc" },
+      include: { listing: true, senderProfile: true, replyToAgent: true, savedAudience: true },
+    });
+    if (recent) {
+      await writeAudit(tx, actor, {
+        action: "campaign.quick_start_reused",
+        entityType: "campaign",
+        entityId: recent.id,
+        after: { listingId },
+      });
+      return {
+        campaign: recent,
+        created: false,
+        defaults: { senderResolved: true, replyToResolved: true, templateResolved: true },
+      };
+    }
+
+    const sender = await tx.senderProfile.findFirst({
+      where: { isActive: true, verificationStatus: "VERIFIED" },
+      orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
+    });
+    if (!sender)
+      throw new DomainError(
+        "VERIFIED_SENDER_REQUIRED",
+        "No verified sender is configured. Ask an admin to configure the From address.",
+        409
+      );
+    const subject = `New listing: ${listing.title}`.slice(0, 150);
+    const campaign = await tx.campaign.create({
+      data: {
+        name: quickStartName(listing.addressLine1),
+        listingId,
+        senderProfileId: sender.id,
+        replyToAgentId: listing.agentId,
+        templateKey: "LISTING_BRANDED",
+        subject,
+        preheader: `Take a look at ${listing.addressLine1}, ${listing.city}`.slice(0, 200),
+        introHtml: sanitizeIntro(
+          "<p>I wanted to share this new listing with you. Please reply if you would like more information or to arrange a showing.</p>"
+        ),
+        introText:
+          "I wanted to share this new listing with you. Please reply if you would like more information or to arrange a showing.",
+        ctaLabel: "View Listing",
+        ctaUrl: listing.listingUrl ?? config.companyListingsUrl,
+        audienceFilter: { includeContactIds: [], requireKnownPermissionBasis: true },
+        timezone: "America/New_York",
+        createdByUserId: actor.userId,
+        updatedByUserId: actor.userId,
+      },
+      include: { listing: true, senderProfile: true, replyToAgent: true, savedAudience: true },
+    });
+    await writeAudit(tx, actor, {
+      action: "campaign.quick_start_created",
+      entityType: "campaign",
+      entityId: campaign.id,
+      after: { listingId, senderProfileId: sender.id },
+    });
+    return {
+      campaign,
+      created: true,
+      defaults: { senderResolved: true, replyToResolved: true, templateResolved: true },
+    };
+  });
+}
+
 export async function updateCampaign(
   id: string,
   body: unknown,
@@ -677,6 +771,154 @@ export async function queueCampaignSnapshot(
     });
     await writeAudit(tx, actor, {
       action: "campaign.snapshot_queued",
+      entityType: "campaign",
+      entityId: id,
+      after: { scheduledAt: scheduledAt?.toISOString() ?? null, expectedVersion },
+    });
+    return updated;
+  });
+}
+
+export async function publishCampaign(
+  id: string,
+  actor: ActorContext,
+  expectedVersion: number,
+  scheduledAt: Date | undefined,
+  clientIdempotencyKey: string
+) {
+  const keySuffix = clientIdempotencyKey.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 80);
+  if (!keySuffix)
+    throw new DomainError("IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required.", 400);
+  const uniqueKey = `SNAPSHOT_CAMPAIGN/${id}/${keySuffix}`;
+  return inTransaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM campaigns WHERE id = ${id}::uuid FOR UPDATE`;
+    let campaign = await campaignForRendering(id, tx);
+    if (!campaign) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
+    const priorJob = await tx.job.findUnique({ where: { uniqueKey } });
+    if (
+      priorJob &&
+      ["SNAPSHOTTING", "SCHEDULED", "QUEUED", "SENDING", "COMPLETED"].includes(campaign.status)
+    )
+      return campaign;
+    if (campaign.version !== expectedVersion)
+      throw new DomainError(
+        "CAMPAIGN_VERSION_CONFLICT",
+        "Campaign was changed before it could be sent.",
+        409,
+        { currentVersion: campaign.version }
+      );
+    if (!campaign.listingId)
+      throw new DomainError("CAMPAIGN_LISTING_REQUIRED", "Choose a property before sending.", 409);
+    if (campaign.lastTestedVersion !== campaign.version || !campaign.lastSuccessfulTestAt)
+      throw new DomainError(
+        "CURRENT_TEST_SEND_REQUIRED",
+        "Send a successful test for the current email before continuing.",
+        409
+      );
+    if (campaign.status !== CampaignStatus.DRAFT && campaign.status !== CampaignStatus.READY)
+      throw new DomainError(
+        "CAMPAIGN_INVALID_STATE",
+        "Only a draft or ready email can be sent.",
+        409
+      );
+    if (
+      campaign.listing?.status === "DRAFT" &&
+      campaign.listing.assets.some(
+        (asset) => asset.kind === "HERO" && asset.isEmailSafe && !asset.deletedAt
+      ) &&
+      (campaign.listing.listingUrl || config.companyListingsUrl)
+    ) {
+      await tx.listing.update({
+        where: { id: campaign.listing.id },
+        data: { status: "ACTIVE", publishedAt: new Date(), updatedByUserId: actor.userId },
+      });
+      await writeAudit(tx, actor, {
+        action: "listing.activated_for_publish",
+        entityType: "listing",
+        entityId: campaign.listing.id,
+        after: { campaignId: id },
+      });
+      campaign = await campaignForRendering(id, tx);
+      if (!campaign) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
+    }
+    const audienceFilter = audienceFilterSchema.parse(campaign.audienceFilter);
+    const audienceContacts = await resolveAudienceContacts(tx, audienceFilter);
+    const activeSuppressions = audienceContacts.length
+      ? await tx.suppression.findMany({
+          where: {
+            isActive: true,
+            emailNormalized: { in: audienceContacts.map((contact) => contact.emailNormalized) },
+          },
+          select: { emailNormalized: true },
+        })
+      : [];
+    const suppressedEmails = new Set(
+      activeSuppressions.map((suppression) => suppression.emailNormalized)
+    );
+    const previouslySentContactIds =
+      audienceFilter.excludePreviouslySentListing && campaign.listingId && audienceContacts.length
+        ? new Set(
+            (
+              await tx.campaignRecipient.findMany({
+                where: {
+                  contactId: { in: audienceContacts.map((contact) => contact.id) },
+                  sendState: "ACCEPTED",
+                  campaign: { listingId: campaign.listingId, id: { not: id } },
+                },
+                select: { contactId: true },
+              })
+            ).flatMap((item) => (item.contactId ? [item.contactId] : []))
+          )
+        : new Set<string>();
+    const eligibleContacts = audienceContacts.filter(
+      (contact) =>
+        !suppressedEmails.has(contact.emailNormalized) &&
+        (!(audienceFilter.requireKnownPermissionBasis ?? true) ||
+          contact.permissionBasis !== "UNKNOWN") &&
+        !previouslySentContactIds.has(contact.id)
+    );
+    if (!eligibleContacts.length)
+      throw new DomainError(
+        "AUDIENCE_EMPTY",
+        "No eligible recipients remain after permission, suppression, and prior-send checks.",
+        409
+      );
+    const snapshot = snapshotFromCampaign(campaign);
+    if (config.deliveryMode === "live") assertLiveReady(campaign, snapshot);
+    const updated = await tx.campaign.update({
+      where: { id },
+      data: { status: "SNAPSHOTTING" },
+    });
+    const payload = {
+      campaignId: id,
+      expectedVersion,
+      scheduledAt: scheduledAt?.toISOString(),
+      clientIdempotencyKey: keySuffix,
+      actor: {
+        userId: actor.userId,
+        role: actor.role,
+        requestId: actor.requestId,
+        maskedIp: actor.maskedIp,
+        userAgent: actor.userAgent,
+      },
+    };
+    await tx.job.upsert({
+      where: { uniqueKey },
+      create: { type: "SNAPSHOT_CAMPAIGN", uniqueKey, payload, maxAttempts: 3 },
+      update: {
+        payload,
+        status: "PENDING",
+        attempts: 0,
+        runAt: new Date(),
+        lockedAt: null,
+        lockedBy: null,
+        lockExpiresAt: null,
+        lastError: null,
+        completedAt: null,
+      },
+    });
+    await writeAudit(tx, actor, {
+      action: "campaign.publish",
       entityType: "campaign",
       entityId: id,
       after: { scheduledAt: scheduledAt?.toISOString() ?? null, expectedVersion },

@@ -35,6 +35,16 @@ Campaign mutations that can be retried use explicit idempotency or optimistic co
 
 Test send requires a client-generated UUID `clientRequestId`. Its idempotency identity includes campaign/version, actor, normalized-recipient hash and that UUID. Retrying a failed HTTP request with the same UUID is safe; creating a new UUID intentionally sends another test.
 
+## Simplified composer orchestration
+
+The V3 browser flow uses three orchestration endpoints while retaining all V2 primitives:
+
+- `POST /campaigns/quick-start` requires `Idempotency-Key` and a `listingId`. It serializes double-clicks, reuses the current user's recent draft for that listing, or creates a draft with the verified default sender, listing Agent reply identity, safe fallback content and Homix listing CTA.
+- `POST /campaigns/{id}/recipients/onekey-nearby` requires the optimistic campaign `version`. It bulk imports compliant BBO candidates, creates an isolated campaign-specific saved group, applies permission/suppression/recent-contact/previous-listing exclusions, invalidates prior test evidence and returns a compact count summary.
+- `POST /campaigns/{id}/publish` requires `Idempotency-Key`, current `version`, and optional `scheduledAt`. Under a row lock it verifies a successful test for that version, live-send readiness, and the current state, then queues the existing immutable snapshot worker job. A replay with the same key is safe.
+
+`POST /product-events` accepts only enumerated low-cardinality UX events and per-event allowlisted, size-bounded scalar metadata. It writes to the existing audit trail and rejects content, recipient lists, provider details or secrets.
+
 ## OneKey/BBO and AI endpoints
 
 ```text

@@ -49,6 +49,8 @@ Opened/clicked timestamps never overwrite bounced/complained delivery state. Eve
 
 The default deliverability settings require a sample of 100 accepted messages, then pause the campaign and suspend its sender at a complaint rate of 0.1% or bounce rate of 5%. The latest action-required alert is exposed in system readiness for operator review; thresholds are data, not hard-coded provider-policy claims.
 
+V3 requires no schema migration. Quick-start idempotency is serialized with a PostgreSQL advisory transaction lock and recent-draft lookup; publish idempotency continues to use the durable Job `unique_key`. Suggested-recipient criteria remain validated JSON in `saved_audiences.filter` / `campaigns.audience_filter`, including `excludeEmailedWithinDays`, and test evidence remains in the existing campaign/TestSendRecord fields.
+
 ## Core invariants
 
 1. Campaign content and recipient selection freeze in one transaction before scheduling.

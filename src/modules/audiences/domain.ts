@@ -32,6 +32,10 @@ export function compileAudienceWhere(
       lastEngagedAt: { gte: new Date(Date.now() - filter.engagedWithinDays * 86_400_000) },
     });
   }
+  if (filter.excludeEmailedWithinDays) {
+    const cutoff = new Date(Date.now() - filter.excludeEmailedWithinDays * 86_400_000);
+    and.push({ OR: [{ lastSentAt: null }, { lastSentAt: { lt: cutoff } }] });
+  }
   if (filter.createdAfter) and.push({ createdAt: { gte: new Date(filter.createdAfter) } });
   return { AND: and };
 }

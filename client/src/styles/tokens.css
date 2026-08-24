@@ -1,0 +1,17 @@
+:root {
+  --hm-green-950: #102e24;
+  --hm-green-800: #174535;
+  --hm-green-700: #225b47;
+  --hm-green-100: #e8f0ec;
+  --hm-orange: #c86634;
+  --hm-orange-dark: #a84d22;
+  --hm-paper: #f6f4ef;
+  --hm-surface: #ffffff;
+  --hm-ink: #202521;
+  --hm-muted: #66706a;
+  --hm-line: #dfe2dd;
+  --hm-danger: #a63c36;
+  --hm-warning: #95620a;
+  --hm-radius: 14px;
+  --hm-shadow: 0 12px 32px rgba(20, 45, 35, 0.08);
+}

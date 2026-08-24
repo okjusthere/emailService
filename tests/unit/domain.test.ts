@@ -108,12 +108,14 @@ describe("audience DSL", () => {
       includeContactIds: ["11111111-1111-4111-8111-111111111111"],
       excludeContactIds: ["22222222-2222-4222-8222-222222222222"],
       engagedWithinDays: 30,
+      excludeEmailedWithinDays: 14,
       createdAfter: "2026-01-01T00:00:00.000Z",
       requireKnownPermissionBasis: false,
     });
     const where = compileAudienceWhere(full);
     expect(JSON.stringify(where)).toContain("REFERRAL");
     expect(JSON.stringify(where)).toContain("lastEngagedAt");
+    expect(JSON.stringify(where)).toContain("lastSentAt");
     expect(JSON.stringify(where)).not.toContain(PermissionBasis.UNKNOWN);
 
     const preview = compileAudienceWhere(audienceFilterSchema.parse({}), false);

@@ -13,7 +13,6 @@ export default defineConfig({
       output: {
         manualChunks: {
           react: ["react", "react-dom", "react-router-dom"],
-          editor: ["@tiptap/react", "@tiptap/starter-kit"],
           charts: ["recharts"],
         },
       },

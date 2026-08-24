@@ -18,7 +18,9 @@ import {
   createCampaign,
   listCampaigns,
   markCampaignReady,
+  publishCampaign,
   previewCampaign,
+  quickStartCampaign,
   queueCampaignSnapshot,
   testSendCampaign,
   transitionCampaign,
@@ -49,6 +51,7 @@ import {
   getOneKeyListingReview,
   importOneKeyListing,
   importOneKeyRecipients,
+  configureCampaignOneKeyRecipients,
   previewOneKeyRecipients,
   refreshOneKeyListing,
   searchOneKeyListings,
@@ -131,6 +134,49 @@ const oneKeyRecipientSchema = z.object({
   limit: z.coerce.number().int().min(1).max(5000).default(2000),
 });
 const aiToneSchema = z.enum(["professional", "warm", "concise", "luxury"]);
+const idempotencyKeySchema = z.string().trim().min(8).max(200);
+const productEventSchema = z.enum([
+  "campaign_start",
+  "property_search",
+  "property_selected",
+  "recipient_source_selected",
+  "recipients_generated",
+  "ai_draft_started",
+  "ai_draft_generated",
+  "ai_draft_completed",
+  "ai_draft_failed",
+  "autosave_success",
+  "autosave_conflict",
+  "test_send_completed",
+  "test_send_started",
+  "test_send_succeeded",
+  "publish_started",
+  "publish_succeeded",
+  "publish_failed",
+  "publish_confirmed",
+  "composer_abandoned",
+]);
+const productEventMetadataKeys: Record<z.infer<typeof productEventSchema>, readonly string[]> = {
+  campaign_start: [],
+  property_search: ["queryLength"],
+  property_selected: [],
+  recipient_source_selected: ["eligible"],
+  recipients_generated: ["eligible"],
+  ai_draft_started: [],
+  ai_draft_generated: [],
+  ai_draft_completed: [],
+  ai_draft_failed: [],
+  autosave_success: ["version"],
+  autosave_conflict: [],
+  test_send_completed: [],
+  test_send_started: [],
+  test_send_succeeded: [],
+  publish_started: ["scheduled"],
+  publish_succeeded: [],
+  publish_failed: [],
+  publish_confirmed: [],
+  composer_abandoned: [],
+};
 
 router.get("/ai/status", (_req, res) => {
   const testOnly = config.aiProvider === "fake";
@@ -181,6 +227,7 @@ router.post("/campaigns/:id/ai/apply", requireRole("ADMIN", "MARKETER"), async (
       generationId: z.uuid(),
       variantIndex: z.number().int().min(0).max(2),
       fields: z.array(z.enum(["subject", "preheader", "introText", "ctaLabel"])).min(1),
+      version: z.number().int().positive().optional(),
     })
     .parse(req.body);
   res.json(
@@ -189,7 +236,8 @@ router.post("/campaigns/:id/ai/apply", requireRole("ADMIN", "MARKETER"), async (
       input.generationId,
       input.variantIndex,
       input.fields,
-      actorFromRequest(req)
+      actorFromRequest(req),
+      input.version
     )
   );
 });
@@ -1273,6 +1321,12 @@ router.get("/operations/webhooks", requireRole("ADMIN"), async (req, res) => {
 router.get("/campaigns", async (req, res) => {
   res.json(await listCampaigns(req.query));
 });
+router.post("/campaigns/quick-start", requireRole("ADMIN", "MARKETER"), async (req, res) => {
+  const { listingId } = z.object({ listingId: z.uuid() }).parse(req.body);
+  idempotencyKeySchema.parse(req.get("idempotency-key"));
+  const result = await quickStartCampaign(listingId, actorFromRequest(req));
+  res.status(result.created ? 201 : 200).json(result);
+});
 router.post("/campaigns", requireRole("ADMIN", "MARKETER"), async (req, res) => {
   campaignInputSchema.parse(req.body);
   res.status(201).json(await createCampaign(req.body, actorFromRequest(req)));
@@ -1281,7 +1335,17 @@ router.get("/campaigns/:id", async (req, res) => {
   const { id } = idParam.parse(req.params);
   const item = await prisma.campaign.findUnique({
     where: { id },
-    include: { listing: true, senderProfile: true, replyToAgent: true, savedAudience: true },
+    include: {
+      listing: {
+        include: {
+          agent: true,
+          assets: { where: { deletedAt: null }, orderBy: { sortOrder: "asc" } },
+        },
+      },
+      senderProfile: true,
+      replyToAgent: true,
+      savedAudience: true,
+    },
   });
   if (!item) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
   res.json(item);
@@ -1353,6 +1417,36 @@ router.post("/campaigns/:id/test-send", requireRole("ADMIN", "MARKETER"), async 
     )
   );
 });
+router.post(
+  "/campaigns/:id/recipients/onekey-nearby",
+  requireRole("ADMIN", "MARKETER"),
+  async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const input = oneKeyRecipientSchema
+      .extend({
+        version: z.number().int().positive(),
+        excludeEmailedWithinDays: z.number().int().min(1).max(365).default(14),
+      })
+      .parse(req.body);
+    res.json(await configureCampaignOneKeyRecipients(id, input, actorFromRequest(req)));
+  }
+);
+router.post("/campaigns/:id/publish", requireRole("ADMIN", "MARKETER"), async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  const input = campaignActionSchema.parse(req.body);
+  const key = idempotencyKeySchema.parse(req.get("idempotency-key"));
+  res
+    .status(202)
+    .json(
+      await publishCampaign(
+        id,
+        actorFromRequest(req),
+        input.version,
+        input.scheduledAt ? new Date(input.scheduledAt) : undefined,
+        key
+      )
+    );
+});
 router.post("/campaigns/:id/mark-ready", requireRole("ADMIN", "MARKETER"), async (req, res) => {
   const { id } = idParam.parse(req.params);
   res.json(await markCampaignReady(id, actorFromRequest(req)));
@@ -1393,6 +1487,40 @@ for (const action of ["pause", "resume", "cancel"] as const)
     const { id } = idParam.parse(req.params);
     res.json(await transitionCampaign(id, action, actorFromRequest(req)));
   });
+
+router.post("/product-events", async (req, res) => {
+  const input = z
+    .object({
+      event: productEventSchema,
+      campaignId: z.uuid().optional(),
+      metadata: z
+        .record(
+          z.string().max(40),
+          z.union([z.string().max(120), z.number().finite(), z.boolean(), z.null()])
+        )
+        .refine((value) => Object.keys(value).length <= 6, "Too many metadata fields")
+        .optional(),
+    })
+    .parse(req.body);
+  const allowedKeys = new Set(productEventMetadataKeys[input.event]);
+  if (Object.keys(input.metadata ?? {}).some((key) => !allowedKeys.has(key)))
+    throw new DomainError(
+      "PRODUCT_EVENT_METADATA_INVALID",
+      "Product event metadata contains an unsupported field.",
+      400
+    );
+  await prisma.auditLog.create({
+    data: {
+      actorUserId: req.user?.id,
+      action: `product.${input.event}`,
+      entityType: input.campaignId ? "campaign" : "product",
+      entityId: input.campaignId,
+      requestId: String(req.id ?? "unknown"),
+      after: (input.metadata ?? {}) as Prisma.InputJsonValue,
+    },
+  });
+  res.status(204).end();
+});
 router.get("/campaigns/:id/stats", async (req, res) => {
   const { id } = idParam.parse(req.params);
   res.json(await recomputeCampaignStats(id));
