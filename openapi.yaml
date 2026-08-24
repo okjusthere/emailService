@@ -780,6 +780,19 @@ paths:
         requestBody: { $ref: "#/components/requestBodies/JsonBody" },
         responses: { "201": { $ref: "#/components/responses/Success" } },
       }
+  /campaigns/quick-start:
+    post:
+      tags: [Campaigns]
+      operationId: quickStartCampaign
+      summary: Create or reuse a recent listing-email draft with safe defaults
+      parameters: [{ $ref: "#/components/parameters/RequiredIdempotencyKey" }]
+      requestBody: { $ref: "#/components/requestBodies/JsonBody" }
+      responses:
+        {
+          "200": { $ref: "#/components/responses/Success" },
+          "201": { $ref: "#/components/responses/Success" },
+          "409": { $ref: "#/components/responses/Error" },
+        }
   /campaigns/{id}:
     parameters: [{ $ref: "#/components/parameters/Id" }]
     get:
@@ -836,6 +849,34 @@ paths:
             "409": { $ref: "#/components/responses/Error" },
           },
       }
+  /campaigns/{id}/recipients/onekey-nearby:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      tags: [Campaigns, OneKey]
+      operationId: configureCampaignOneKeyRecipients
+      summary: Import compliant nearby OneKey agents and attach a reusable audience to the draft
+      requestBody: { $ref: "#/components/requestBodies/JsonBody" }
+      responses:
+        {
+          "200": { $ref: "#/components/responses/Success" },
+          "409": { $ref: "#/components/responses/Error" },
+        }
+  /campaigns/{id}/publish:
+    parameters:
+      [
+        { $ref: "#/components/parameters/Id" },
+        { $ref: "#/components/parameters/RequiredIdempotencyKey" },
+      ]
+    post:
+      tags: [Campaigns]
+      operationId: publishCampaign
+      summary: Atomically validate the current tested version and queue its immutable snapshot
+      requestBody: { $ref: "#/components/requestBodies/JsonBody" }
+      responses:
+        {
+          "202": { $ref: "#/components/responses/Success" },
+          "409": { $ref: "#/components/responses/Error" },
+        }
   /campaigns/{id}/mark-ready:
     parameters: [{ $ref: "#/components/parameters/Id" }]
     post:
@@ -911,6 +952,13 @@ paths:
         summary: Recompute and return campaign aggregates,
         responses: { "200": { $ref: "#/components/responses/Success" } },
       }
+  /product-events:
+    post:
+      tags: [Analytics]
+      operationId: recordProductEvent
+      summary: Record an allowlisted low-cardinality composer event in the audit trail
+      requestBody: { $ref: "#/components/requestBodies/JsonBody" }
+      responses: { "204": { description: Event recorded } }
   /campaigns/{id}/recipients:
     parameters: [{ $ref: "#/components/parameters/Id" }]
     get:
@@ -1437,6 +1485,14 @@ components:
         required: false,
         schema: { type: string, maxLength: 80 },
         description: Stable client action key used to deduplicate schedule or send-now.,
+      }
+    RequiredIdempotencyKey:
+      {
+        name: Idempotency-Key,
+        in: header,
+        required: true,
+        schema: { type: string, minLength: 8, maxLength: 200 },
+        description: Stable client action key required to safely retry a composer action.,
       }
   requestBodies:
     JsonBody:

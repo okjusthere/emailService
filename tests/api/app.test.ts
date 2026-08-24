@@ -170,6 +170,32 @@ describe("HTTP security and API contract", () => {
     expect(completeCsv.text.trim().split("\n")).toHaveLength(106);
   });
 
+  it("exposes guarded simplified-composer orchestration endpoints", async () => {
+    await agent
+      .post("/api/v2/campaigns/quick-start")
+      .set(mutationHeaders)
+      .send({ listingId: "11111111-1111-4111-8111-111111111111" })
+      .expect(400);
+    await agent
+      .post("/api/v2/campaigns/11111111-1111-4111-8111-111111111111/publish")
+      .set(mutationHeaders)
+      .send({ version: 1 })
+      .expect(400);
+    await agent
+      .post("/api/v2/product-events")
+      .set(mutationHeaders)
+      .send({ event: "property_search", metadata: { queryLength: 8 } })
+      .expect(204);
+    await agent
+      .post("/api/v2/product-events")
+      .set(mutationHeaders)
+      .send({ event: "property_search", metadata: { email: "recipient@example.com" } })
+      .expect(400);
+    expect(
+      await prisma.auditLog.count({ where: { action: "product.property_search" } })
+    ).toBeGreaterThan(0);
+  });
+
   it("paginates by cursor and rejects an SVG upload regardless of its filename", async () => {
     const unique = Date.now().toString(36);
     const contactIds: string[] = [];

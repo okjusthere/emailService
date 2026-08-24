@@ -6,9 +6,9 @@ const csrf = { Origin: "http://127.0.0.1:3000", "X-Homix-CSRF": "1" };
 test("admin completes a listing campaign and observes delivery", async ({ page }) => {
   const unique = `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /Listing campaigns/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByRole("heading", { name: "Marketing desk" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Create a listing email" })).toBeVisible();
 
   const api = page.request;
   await expect.poll(async () => (await api.get("/api/v2/auth/me")).status()).toBe(200);
@@ -131,14 +131,10 @@ test("admin completes a listing campaign and observes delivery", async ({ page }
     listingUrl: "https://www.homixny.com/listings",
   });
 
-  await page.goto("/campaigns");
-  await page.getByRole("button", { name: "New campaign" }).click();
-  const importedListing = page.getByLabel("Choose an imported listing");
-  await expect(importedListing.getByRole("option", { name: /DRAFT/ })).toContainText(listing.title);
-  await importedListing.selectOption(listing.id);
-  await expect(importedListing).toHaveValue(listing.id);
-  await page.getByRole("button", { name: "Content" }).click();
-  await expect(page.getByLabel("CTA URL")).toHaveValue("https://www.homixny.com/listings");
+  await page.goto("/");
+  await page.getByLabel("MLS number or address").fill("90000001");
+  await page.getByRole("button", { name: "Find property" }).click();
+  await expect(page.getByRole("heading", { name: listing.title })).toBeVisible();
 
   const listingReview = await api.get(`/api/v2/onekey/listings/${listing.sourceKey}`);
   expect(listingReview.ok(), await listingReview.text()).toBeTruthy();
@@ -342,10 +338,11 @@ test("admin completes a listing campaign and observes delivery", async ({ page }
     .toBe("DELIVERED");
 
   await page.goto("/campaigns");
+  await page.getByRole("tab", { name: "Sent" }).click();
   await expect(page.getByText(`Roosevelt launch ${unique}`)).toBeVisible();
   await expect(
-    page.getByRole("row").filter({ hasText: `Roosevelt launch ${unique}` })
-  ).toContainText("COMPLETED");
+    page.getByRole("link").filter({ hasText: `Roosevelt launch ${unique}` })
+  ).toContainText("Sent");
 
   const raw = `${accepted.id}.${createHmac("sha256", "playwright-unsubscribe-secret-at-least-thirty-two-bytes").update(accepted.id).digest("base64url")}`;
   const token = Buffer.from(raw).toString("base64url");
@@ -356,8 +353,8 @@ test("admin completes a listing campaign and observes delivery", async ({ page }
 
   await page.setViewportSize({ width: 700, height: 900 });
   await page.goto("/");
-  await page.getByRole("button", { name: "Open navigation" }).click();
-  await expect(page.getByRole("link", { name: "Listings" })).toBeVisible();
+  await page.getByRole("button", { name: "Open menu" }).click();
+  await expect(page.getByRole("link", { name: "Home" })).toBeVisible();
 });
 
 test("searches the populated OneKey index by address and reuses the imported listing", async ({
@@ -388,4 +385,133 @@ test("searches the populated OneKey index by address and reuses the imported lis
   });
   expect(reused.status()).toBe(200);
   expect(await reused.json()).toMatchObject({ created: false });
+});
+
+test("completes the simplified listing email composer on desktop and mobile", async ({ page }) => {
+  await page.route("**/api/v2/ai/status", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        enabled: true,
+        provider: "azure-openai",
+        model: "production-copy",
+        productionReady: true,
+        mode: "production",
+      }),
+    });
+  });
+  await page.route("**/api/v2/campaigns/*/ai/generate", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    await route.continue();
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Create a listing email" })).toBeVisible();
+  await page.screenshot({ path: "artifacts/screenshots/home-empty.png", fullPage: true });
+
+  await page.getByLabel("MLS number or address").fill("90000001");
+  await page.getByRole("button", { name: "Find property" }).click();
+  await expect(page.getByRole("button", { name: /Use this property/ })).toBeVisible();
+  await page.screenshot({ path: "artifacts/screenshots/home-search-results.png", fullPage: true });
+  await page.getByRole("button", { name: /Use this property/ }).click();
+  await expect(page.getByRole("heading", { name: "Create listing email" })).toBeVisible();
+  await page.screenshot({ path: "artifacts/screenshots/composer-desktop.png", fullPage: true });
+  await expect(page.getByText("Writing your email…")).toBeVisible();
+  await page.screenshot({ path: "artifacts/screenshots/composer-ai-writing.png", fullPage: true });
+  await expect(page.getByText(/AI draft — review before sending/)).toBeVisible();
+
+  await page.getByRole("button", { name: "Suggest recipients" }).click();
+  await expect(page.getByText(/people ready/)).toBeVisible();
+  const subject = page.getByLabel("Subject");
+  await subject.fill(`Simplified composer ${Date.now()}`);
+  await page.waitForTimeout(1_100);
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /Send test to/ }).click();
+  await expect(page.locator(".test-status")).toContainText("Test sent to admin@homixny.com");
+  await page.screenshot({
+    path: "artifacts/screenshots/composer-test-complete.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".app-sidebar")).not.toHaveClass(/open/);
+  await expect
+    .poll(() =>
+      page.locator(".app-sidebar").evaluate((element) => element.getBoundingClientRect().right)
+    )
+    .toBeLessThanOrEqual(0);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth))
+    .toBeLessThanOrEqual(0);
+  await page.getByRole("button", { name: "Show" }).click();
+  await expect(page.getByTitle("Email preview")).toBeVisible();
+  await page.screenshot({ path: "artifacts/screenshots/composer-mobile.png", fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1_000 });
+
+  const reviewButton = page.getByRole("button", { name: "Review & send" });
+  await reviewButton.click();
+  await expect(page.getByRole("heading", { name: "Ready to send?" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Close" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "Ready to send?" })).toBeHidden();
+  await expect(reviewButton).toBeFocused();
+  await reviewButton.click();
+  await expect(page.getByRole("button", { name: "Close" })).toBeFocused();
+  await page.screenshot({ path: "artifacts/screenshots/send-review-dialog.png", fullPage: true });
+  await page.getByRole("button", { name: /Send to 1 recipients/ }).click();
+  await page.screenshot({ path: "artifacts/screenshots/campaign-sending.png", fullPage: true });
+  await expect(page.getByText("Sent")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("External Agent")).toBeVisible({ timeout: 10_000 });
+  await page.screenshot({ path: "artifacts/screenshots/campaign-completed.png", fullPage: true });
+
+  await page.goto("/contacts");
+  await expect(page.getByRole("heading", { name: "Contacts" })).toBeVisible();
+  await page.screenshot({ path: "artifacts/screenshots/contacts.png", fullPage: true });
+  await page.goto("/settings/operations");
+  await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
+  await page.screenshot({ path: "artifacts/screenshots/settings-operations.png", fullPage: true });
+});
+
+test("keeps the fallback draft, restores autosave, and schedules a saved list", async ({
+  page,
+}) => {
+  await page.route("**/api/v2/ai/status", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ enabled: false, productionReady: false, mode: "disabled" }),
+    })
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByLabel("MLS number or address").fill("90000001");
+  await page.getByRole("button", { name: "Find property" }).click();
+  await page.getByRole("button", { name: /Use this property/ }).click();
+  await expect(page.getByRole("heading", { name: "Create listing email" })).toBeVisible();
+  await expect(page.getByLabel("Subject")).toHaveValue(/New listing:/i);
+
+  await page.getByRole("tab", { name: "Saved contact list" }).click();
+  const list = page.getByLabel("Saved list");
+  await list.selectOption({ index: 1 });
+  await expect(page.getByRole("button", { name: "Send test to me" })).toBeEnabled();
+  const restoredSubject = `Saved schedule ${Date.now()}`;
+  await page.getByLabel("Subject").fill(restoredSubject);
+  const campaignId = page.url().match(/campaigns\/([^/]+)/)?.[1];
+  expect(campaignId).toBeTruthy();
+  await expect
+    .poll(
+      async () => (await (await page.request.get(`/api/v2/campaigns/${campaignId}`)).json()).subject
+    )
+    .toBe(restoredSubject);
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("Subject")).toHaveValue(restoredSubject);
+  await page.getByRole("button", { name: "Send test to me" }).click();
+  await expect(page.locator(".test-status")).toContainText("Test sent to admin@homixny.com");
+  await page.getByRole("button", { name: "Review & send" }).click();
+  await page.getByLabel("Schedule for later").check();
+  const tomorrow = new Date(Date.now() + 86_400_000);
+  tomorrow.setHours(10, 0, 0, 0);
+  const local = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}T10:00`;
+  await page.getByLabel("Send date and time").fill(local);
+  await page.getByRole("button", { name: "Schedule email" }).click();
+  await expect(page.locator(".status-badge")).toHaveText("Scheduled", { timeout: 10_000 });
 });

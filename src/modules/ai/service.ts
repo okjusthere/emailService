@@ -149,12 +149,24 @@ export async function applyCampaignCopy(
   generationId: string,
   variantIndex: number,
   fieldsToApply: string[],
-  actor: ActorContext
+  actor: ActorContext,
+  expectedVersion?: number
 ) {
   const allowed = new Set(["subject", "preheader", "introText", "ctaLabel"]);
   if (!fieldsToApply.length || fieldsToApply.some((field) => !allowed.has(field)))
     throw new DomainError("AI_FIELDS_INVALID", "Choose one or more supported proposal fields.");
   return prisma.$transaction(async (tx) => {
+    const current = await tx.campaign.findUnique({ where: { id: campaignId } });
+    if (!current) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
+    if (current.status !== "DRAFT")
+      throw new DomainError("CAMPAIGN_LOCKED", "Only a draft email can be rewritten.", 409);
+    if (expectedVersion !== undefined && current.version !== expectedVersion)
+      throw new DomainError(
+        "CAMPAIGN_VERSION_CONFLICT",
+        "This email changed while AI was writing.",
+        409,
+        { currentVersion: current.version }
+      );
     const generation = await tx.aiGeneration.findUnique({ where: { id: generationId } });
     if (!generation || generation.campaignId !== campaignId || generation.kind !== "CAMPAIGN_COPY")
       throw new DomainError("AI_GENERATION_NOT_FOUND", "Campaign proposal not found.", 404);
@@ -167,10 +179,23 @@ export async function applyCampaignCopy(
     );
     if (fieldsToApply.includes("introText"))
       data.introHtml = sanitizeIntro(`<p>${escapeHtmlText(variant.introText)}</p>`);
-    const campaign = await tx.campaign.update({
-      where: { id: campaignId },
-      data: { ...data, version: { increment: 1 }, updatedByUserId: actor.userId },
+    const updated = await tx.campaign.updateMany({
+      where: { id: campaignId, version: expectedVersion ?? current.version, status: "DRAFT" },
+      data: {
+        ...data,
+        version: { increment: 1 },
+        updatedByUserId: actor.userId,
+        lastSuccessfulTestAt: null,
+        lastTestedVersion: null,
+      },
     });
+    if (updated.count !== 1)
+      throw new DomainError(
+        "CAMPAIGN_VERSION_CONFLICT",
+        "This email changed while AI was writing.",
+        409
+      );
+    const campaign = await tx.campaign.findUniqueOrThrow({ where: { id: campaignId } });
     await tx.aiGeneration.update({
       where: { id: generation.id },
       data: { status: "APPLIED", appliedFields: fieldsToApply, appliedAt: new Date() },

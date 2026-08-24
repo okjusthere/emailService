@@ -1,10 +1,10 @@
-# Homix Marketing Listing V2
+# Homix Marketing Listing V3
 
 Homix Realty 的房源营销邮件工作台。系统将联系人、房源、受众、Campaign、Resend 投递与合规事件放在一个可审计流程中；生产数据库为 PostgreSQL，Web、Worker 和 Migration 使用同一不可变 Docker 镜像、三个独立运行角色。
 
 ## 能力
 
-- React 管理台：Dashboard、Listings、Contacts/CSV Import、Audiences、Campaign Wizard/详情、Analytics、Settings。
+- React 工作台：首页 MLS/地址搜索、次级 Property Library、单页邮件编辑器、Campaign 生命周期、Contacts/Lists/Suppressed、Reports 与分层 Settings/Operations。
 - Express `/api/v2`：Entra Easy Auth 身份映射、ADMIN/MARKETER/VIEWER RBAC、CSRF、速率限制和 mutation audit。
 - OneKey/BBO：按 MLS 号或地址搜索本地索引，通过 BBO 的合规 listing API 导入/刷新房源、复制媒体，并显式预览/导入最近 12–24 个月同邮编及相邻邮编成交经纪人受众；不存在 Homix/挂牌办公室所有权门禁。
 - AI 辅助：支持 OpenAI 与 Azure OpenAI Responses API、结构化输出、只使用 allowlist 房源事实，先保存 proposal，再由用户逐字段 Apply；`fake` 会明确标为测试文案且不能在生产 UI 中生成。
@@ -38,16 +38,16 @@ npm run dev:worker
 
 OneKey 与 AI 同样默认禁用，不需要外部凭据即可启动。开发验收可设置 `ONEKEY_PROVIDER=fake` 和 `AI_PROVIDER=fake`。生产使用 `ONEKEY_PROVIDER=bbo`，由 BBO 提供 OneKey listing/媒体/收件人数据；BBO key 必须仅授予 `marketing:read` 与读取 listing/events 所需的最小 scope。若 BBO 的媒体使用独立主机，必须用 `ONEKEY_MEDIA_ALLOWED_ORIGINS` 明确列出完整 origin（例如 `https://onekeymls.kevv.ai`）；不接受路径或通配域名。
 
-## Quick Start: Send a New Listing Campaign
+## Quick Start: Send a Listing Email
 
-1. 在 Listings 或 Campaign Wizard 中按 MLS 号/地址搜索 OneKey。
-2. 选择结果并导入或复用已有 marketing listing。
-3. 对照 source facts 审核内容；需要时生成 AI proposal，勾选字段后 Apply。
-4. 预览 BBO 返回的同邮编/相邻邮编成交经纪人，确认后导入 saved audience，或选择已有受众。
-5. 选择 verified sender profile；Reply-To 与邮件落款自动锁定为 listing Agent，Campaign 不能覆盖。
-6. 生成并人工选择 AI Campaign subject/preheader/intro/CTA，确认完整房源正文和 Agent 落款后预览并发送 test。
-7. Mark ready 后 snapshot、schedule/send；快照不随 OneKey 后续刷新而改变。
-8. 在 Campaign/Analytics 监控 accepted、delivered、bounce、complaint、manual review 与 suppression。
+1. 在 Home 输入 MLS 号或地址并选择房源；系统自动导入或复用房源，并创建/复用最近 24 小时的草稿。
+2. 默认选择 **Nearby active agents**；也可直接选择 Saved contact list 或安全 Custom segment。附近经纪人默认使用同邮编加最近 3 个邮编、过去 12 个月成交，并排除抑制、近期已发和同房源已联系地址。
+3. AI 生产配置可用时会自动写一次初稿并提供三个主题方案与改写风格；否则保留安全的人工起始文案。Subject、preview text、正文、CTA 都可直接编辑并自动保存。
+4. 在右侧 Desktop/Mobile 预览确认完整房源和 Listing Agent 落款，然后点击 **Send test to me** 测试当前版本。
+5. 测试成功后点击 **Review & send**，选择立即或定时发送并确认。服务端原子验证版本并创建不可变内容/收件人快照。
+6. 在 Campaigns 查看 In progress、Preparing、Scheduled、Sending、Paused 或 Sent，并在 Reports 查看汇总。旧 `/listings`、`/audiences`、`/analytics` 链接会重定向到新页面。
+
+普通 Marketer 页面不需要理解 provider、model、audience filter、snapshot 或 worker；这些仍保留在服务端和管理员 Operations 中。旧 V2 API 继续兼容，自动保存使用 `If-Match`，测试和发布都要求当前版本。
 
 ## 运行角色
 

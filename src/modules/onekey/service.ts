@@ -344,55 +344,60 @@ export async function importOneKeyRecipients(
   const candidates = await getOneKeyProvider().getRecipientCandidates(listing.sourceKey, input);
   const result = await prisma.$transaction(
     async (tx) => {
-      const contactIds: string[] = [];
-      let created = 0;
-      let updated = 0;
-      for (const candidate of candidates.recipients) {
+      const preparedContacts = candidates.recipients.map((candidate) => {
         const emailNormalized = normalizeEmail(candidate.email);
-        const existing = await tx.contact.findUnique({ where: { emailNormalized } });
-        const matching = {
-          sourceListingKey: listing.sourceKey,
-          sourceListingId: listing.sourceListingId,
-          selectionPolicy: candidates.selectionPolicy,
-          matchedTransactionSides: candidate.matchedTransactionSides,
-          matchedZipCount: candidate.matchedZipCount,
-          nearestDistanceKm: candidate.nearestDistanceKm,
-          matchedSameZip: candidate.matchedSameZip,
-          representedSeller: candidate.representedSeller,
-          representedBuyer: candidate.representedBuyer,
-          memberKey: candidate.memberKey,
-          memberMlsId: candidate.memberMlsId,
-          officeKey: candidate.officeKey,
+        return {
+          candidate,
+          emailNormalized,
+          matching: {
+            sourceListingKey: listing.sourceKey,
+            sourceListingId: listing.sourceListingId,
+            selectionPolicy: candidates.selectionPolicy,
+            matchedTransactionSides: candidate.matchedTransactionSides,
+            matchedZipCount: candidate.matchedZipCount,
+            nearestDistanceKm: candidate.nearestDistanceKm,
+            matchedSameZip: candidate.matchedSameZip,
+            representedSeller: candidate.representedSeller,
+            representedBuyer: candidate.representedBuyer,
+            memberKey: candidate.memberKey,
+            memberMlsId: candidate.memberMlsId,
+            officeKey: candidate.officeKey,
+          },
         };
-        const contact = existing
-          ? await tx.contact.update({
-              where: { id: existing.id },
-              data: {
-                customFields: json({
-                  ...((existing.customFields as Record<string, unknown> | null) ?? {}),
-                  oneKeyMarketingMatch: matching,
-                }),
-              },
-            })
-          : await tx.contact.create({
-              data: {
-                email: candidate.email,
-                emailNormalized,
-                displayName: candidate.fullName,
-                company: candidate.officeName,
-                contactType: "BROKER",
-                sourceType: "MLS_AGENT_MATCH",
-                sourceDetail: `OneKey recent Closed match for ${listing.sourceKey}`,
-                sourceReference: listing.sourceKey,
-                permissionBasis: "BUSINESS_CONTACT",
-                permissionCapturedAt: new Date(),
-                customFields: json({ oneKeyMarketingMatch: matching }),
-              },
-            });
-        if (existing) updated += 1;
-        else created += 1;
-        contactIds.push(contact.id);
-      }
+      });
+      const normalizedEmails = preparedContacts.map((item) => item.emailNormalized);
+      const existingContacts = await tx.contact.findMany({
+        where: { emailNormalized: { in: normalizedEmails } },
+        select: { id: true, emailNormalized: true },
+      });
+      const existingEmails = new Set(existingContacts.map((item) => item.emailNormalized));
+      const missingContacts = preparedContacts.filter(
+        (item) => !existingEmails.has(item.emailNormalized)
+      );
+      if (missingContacts.length)
+        await tx.contact.createMany({
+          data: missingContacts.map(({ candidate, emailNormalized, matching }) => ({
+            email: candidate.email,
+            emailNormalized,
+            displayName: candidate.fullName,
+            company: candidate.officeName,
+            contactType: "BROKER",
+            sourceType: "MLS_AGENT_MATCH",
+            sourceDetail: `OneKey recent Closed match for ${listing.sourceKey}`,
+            sourceReference: listing.sourceKey,
+            permissionBasis: "BUSINESS_CONTACT",
+            permissionCapturedAt: new Date(),
+            customFields: json({ oneKeyMarketingMatch: matching }),
+          })),
+          skipDuplicates: true,
+        });
+      const matchedContacts = await tx.contact.findMany({
+        where: { emailNormalized: { in: normalizedEmails } },
+        select: { id: true, emailNormalized: true, permissionBasis: true },
+      });
+      const contactIds = matchedContacts.map((contact) => contact.id);
+      const created = missingContacts.length;
+      const updated = matchedContacts.length - created;
       const audience = await tx.savedAudience.create({
         data: {
           name: input.audienceName?.trim() || `${listing.title} · OneKey agent matches`,
@@ -430,6 +435,217 @@ export async function importOneKeyRecipients(
     { timeout: 120_000 }
   );
   return { ...result, selection: candidates };
+}
+
+export async function configureCampaignOneKeyRecipients(
+  campaignId: string,
+  input: {
+    version: number;
+    nearbyZipCount: number;
+    closedMonths: number;
+    limit: number;
+    excludeEmailedWithinDays: number;
+  },
+  actor: ActorContext
+) {
+  const campaignRecord = await prisma.campaign.findUnique({
+    where: { id: campaignId },
+    include: { listing: true },
+  });
+  const listing = campaignRecord?.listing;
+  if (!campaignRecord) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
+  if (campaignRecord.status !== "DRAFT")
+    throw new DomainError("CAMPAIGN_LOCKED", "Only a draft email can be edited.", 409);
+  if (campaignRecord.version !== input.version)
+    throw new DomainError(
+      "CAMPAIGN_VERSION_CONFLICT",
+      "This email changed in another window.",
+      409,
+      { currentVersion: campaignRecord.version }
+    );
+  if (!listing || listing.source !== "ONEKEY" || !listing.sourceKey)
+    throw new DomainError(
+      "ONEKEY_LISTING_REQUIRED",
+      "This recipient suggestion is available for OneKey properties.",
+      409
+    );
+  const candidates = await getOneKeyProvider().getRecipientCandidates(listing.sourceKey, input);
+  return prisma.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`SELECT id FROM campaigns WHERE id = ${campaignId}::uuid FOR UPDATE`;
+      const current = await tx.campaign.findUnique({ where: { id: campaignId } });
+      if (!current) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
+      if (current.status !== "DRAFT")
+        throw new DomainError("CAMPAIGN_LOCKED", "Only a draft email can be edited.", 409);
+      if (current.version !== input.version)
+        throw new DomainError(
+          "CAMPAIGN_VERSION_CONFLICT",
+          "This email changed in another window.",
+          409,
+          { currentVersion: current.version }
+        );
+
+      const preparedContacts = candidates.recipients.map((candidate) => {
+        const emailNormalized = normalizeEmail(candidate.email);
+        return {
+          candidate,
+          emailNormalized,
+          matching: {
+            sourceListingKey: listing.sourceKey,
+            sourceListingId: listing.sourceListingId,
+            selectionPolicy: candidates.selectionPolicy,
+            matchedTransactionSides: candidate.matchedTransactionSides,
+            matchedZipCount: candidate.matchedZipCount,
+            nearestDistanceKm: candidate.nearestDistanceKm,
+            matchedSameZip: candidate.matchedSameZip,
+            representedSeller: candidate.representedSeller,
+            representedBuyer: candidate.representedBuyer,
+            memberKey: candidate.memberKey,
+            memberMlsId: candidate.memberMlsId,
+            officeKey: candidate.officeKey,
+          },
+        };
+      });
+      const normalizedEmails = preparedContacts.map((item) => item.emailNormalized);
+      const existingContacts = await tx.contact.findMany({
+        where: { emailNormalized: { in: normalizedEmails } },
+        select: { emailNormalized: true },
+      });
+      const existingEmails = new Set(existingContacts.map((item) => item.emailNormalized));
+      const missingContacts = preparedContacts.filter(
+        (item) => !existingEmails.has(item.emailNormalized)
+      );
+      if (missingContacts.length)
+        await tx.contact.createMany({
+          data: missingContacts.map(({ candidate, emailNormalized, matching }) => ({
+            email: candidate.email,
+            emailNormalized,
+            displayName: candidate.fullName,
+            company: candidate.officeName,
+            contactType: "BROKER",
+            sourceType: "MLS_AGENT_MATCH",
+            sourceDetail: `OneKey recent Closed match for ${listing.sourceKey}`,
+            sourceReference: listing.sourceKey,
+            permissionBasis: "BUSINESS_CONTACT",
+            permissionCapturedAt: new Date(),
+            customFields: json({ oneKeyMarketingMatch: matching }),
+          })),
+          skipDuplicates: true,
+        });
+      const matchedContacts = await tx.contact.findMany({
+        where: { emailNormalized: { in: normalizedEmails } },
+        select: { id: true, emailNormalized: true, permissionBasis: true },
+      });
+      const contactIds = matchedContacts.map((contact) => contact.id);
+      const created = missingContacts.length;
+      const updated = matchedContacts.length - created;
+
+      const filter = {
+        includeContactIds: contactIds,
+        requireKnownPermissionBasis: true,
+        excludePreviouslySentListing: true,
+        excludeEmailedWithinDays: input.excludeEmailedWithinDays,
+      };
+      const cutoff = new Date(Date.now() - input.excludeEmailedWithinDays * 86_400_000);
+      const [suppressionRows, recentRows, previouslySentRows] = await Promise.all([
+        tx.suppression.findMany({
+          where: {
+            isActive: true,
+            emailNormalized: {
+              in: candidates.recipients.map((candidate) => normalizeEmail(candidate.email)),
+            },
+          },
+          select: { emailNormalized: true },
+        }),
+        tx.contact.findMany({
+          where: { id: { in: contactIds }, lastSentAt: { gte: cutoff } },
+          select: { id: true },
+        }),
+        tx.campaignRecipient.findMany({
+          where: {
+            contactId: { in: contactIds },
+            sendState: "ACCEPTED",
+            campaign: { listingId: listing.id, id: { not: campaignId } },
+          },
+          select: { contactId: true },
+        }),
+      ]);
+      const suppressedEmails = new Set(suppressionRows.map((item) => item.emailNormalized));
+      const recentIds = new Set(recentRows.map((item) => item.id));
+      const previouslySentIds = new Set(
+        previouslySentRows.flatMap((item) => (item.contactId ? [item.contactId] : []))
+      );
+      const suppressed = matchedContacts.filter((contact) =>
+        suppressedEmails.has(contact.emailNormalized)
+      ).length;
+      const recentlyEmailed = recentIds.size;
+      const ineligible = matchedContacts.filter(
+        (contact) =>
+          recentIds.has(contact.id) ||
+          previouslySentIds.has(contact.id) ||
+          suppressedEmails.has(contact.emailNormalized) ||
+          contact.permissionBasis === "UNKNOWN"
+      ).length;
+      const eligible = Math.max(0, contactIds.length - ineligible);
+      const previouslyContacted = previouslySentIds.size;
+      const unknownPermission = matchedContacts.filter(
+        (contact) => contact.permissionBasis === "UNKNOWN"
+      ).length;
+      const audience = await tx.savedAudience.create({
+        data: {
+          name: `${listing.title} · Suggested recipients`,
+          description: `${candidates.closedMonths} month closed transactions across ${candidates.zipScope.length} ZIP codes`,
+          filter,
+          lastEstimatedCount: eligible,
+          lastEstimatedAt: new Date(),
+          createdByUserId: actor.userId,
+          updatedByUserId: actor.userId,
+        },
+      });
+      const campaign = await tx.campaign.update({
+        where: { id: campaignId },
+        data: {
+          savedAudienceId: audience.id,
+          audienceFilter: filter,
+          version: { increment: 1 },
+          lastSuccessfulTestAt: null,
+          lastTestedVersion: null,
+          updatedByUserId: actor.userId,
+        },
+        include: { listing: true, senderProfile: true, replyToAgent: true, savedAudience: true },
+      });
+      await writeAudit(tx, actor, {
+        action: "campaign.onekey_nearby_recipients",
+        entityType: "campaign",
+        entityId: campaignId,
+        after: {
+          created,
+          updated,
+          matched: contactIds.length,
+          eligible,
+          suppressed,
+          recentlyEmailed,
+          previouslyContacted,
+          audienceId: audience.id,
+          criteria: input,
+        },
+      });
+      return {
+        campaign,
+        audience,
+        summary: {
+          matched: contactIds.length,
+          eligible,
+          suppressed,
+          recentlyEmailed,
+          previouslyContacted,
+          unknownPermission,
+        },
+        selection: candidates,
+      };
+    },
+    { timeout: 120_000 }
+  );
 }
 
 async function downloadMedia(url: string) {
