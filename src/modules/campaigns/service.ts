@@ -247,7 +247,10 @@ export async function updateCampaign(
 ) {
   const input = campaignInputSchema.partial().parse(body);
   return inTransaction(async (tx) => {
-    const before = await tx.campaign.findUnique({ where: { id } });
+    const before = await tx.campaign.findUnique({
+      where: { id },
+      include: { listing: { select: { agentId: true } } },
+    });
     if (!before) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
     if (!isCampaignEditable(before.status))
       throw new DomainError(
@@ -263,18 +266,25 @@ export async function updateCampaign(
         { currentVersion: before.version }
       );
     const listingId = input.listingId ?? before.listingId;
-    if (!listingId)
-      throw new DomainError("CAMPAIGN_LISTING_REQUIRED", "Campaign requires a listing.", 409);
-    const listing = await tx.listing.findUnique({
-      where: { id: listingId },
-      select: { agentId: true },
-    });
-    if (!listing) throw new DomainError("LISTING_NOT_FOUND", "Listing not found.", 404);
+    const targetListing =
+      input.listingId && input.listingId !== before.listingId
+        ? await tx.listing.findUnique({
+            where: { id: input.listingId },
+            select: { agentId: true },
+          })
+        : before.listing;
+    if (listingId && !targetListing)
+      throw new DomainError("LISTING_NOT_FOUND", "Listing not found.", 404);
+    const shouldSynchronizeReplyTo =
+      targetListing !== null &&
+      (input.listingId !== undefined ||
+        input.replyToAgentId !== undefined ||
+        before.replyToAgentId !== targetListing.agentId);
     const result = await tx.campaign.updateMany({
       where: { id, version },
       data: {
         ...input,
-        replyToAgentId: listing.agentId,
+        ...(shouldSynchronizeReplyTo ? { replyToAgentId: targetListing?.agentId } : {}),
         introHtml: input.introHtml === undefined ? undefined : sanitizeIntro(input.introHtml ?? ""),
         updatedByUserId: actor.userId,
         version: { increment: 1 },
