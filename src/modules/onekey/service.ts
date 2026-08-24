@@ -5,6 +5,7 @@ import { prisma } from "../../db/prisma.js";
 import { processAndStoreAsset } from "../assets/service.js";
 import type { ActorContext } from "../audit/service.js";
 import { writeAudit } from "../audit/service.js";
+import { summarizePublicRemarks } from "./remarks.js";
 import { getOneKeyProvider, type OneKeyListing } from "../../integrations/onekey/index.js";
 import { isAllowedOneKeyMediaUrl } from "../../integrations/onekey/mediaPolicy.js";
 import { normalizeAddress } from "../../integrations/onekey/normalize.js";
@@ -245,7 +246,7 @@ export async function importOneKeyListing(sourceKey: string, agentId: string, ac
         priceUponRequest: !item.listPrice,
         buildingSqFt: item.livingArea ? Math.round(item.livingArea) : null,
         yearBuilt: item.yearBuilt,
-        shortDescription: item.publicRemarks?.slice(0, 1000),
+        shortDescription: summarizePublicRemarks(item.publicRemarks),
         longDescription: item.publicRemarks,
         highlights: [],
         externalId: item.sourceKey,

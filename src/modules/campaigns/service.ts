@@ -84,7 +84,8 @@ function snapshotFromCampaign(
       stateCode: campaign.listing.stateCode,
       postalCode: campaign.listing.postalCode,
       priceText: priceText(campaign.listing),
-      shortDescription: campaign.listing.shortDescription ?? undefined,
+      description:
+        campaign.listing.longDescription ?? campaign.listing.shortDescription ?? undefined,
       highlights: campaign.listing.highlights,
       facts: facts.slice(0, 6),
       heroUrl: hero.publicUrl,
@@ -117,7 +118,7 @@ function snapshotFromCampaign(
       ctaUrl: campaign.ctaUrl ?? campaign.listing.listingUrl ?? "",
     },
     templateVersion:
-      campaign.templateKey === "LISTING_BRANDED" ? "listing-branded@1" : "broker-personal@1",
+      campaign.templateKey === "LISTING_BRANDED" ? "listing-branded@2" : "broker-personal@2",
   };
 }
 

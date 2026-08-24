@@ -10,6 +10,7 @@ export function BrokerPersonalEmail({
   recipient: RecipientMergeData;
 }) {
   const { listing, agent, company, content } = snapshot;
+  const description = listing.description ?? listing.shortDescription;
   const greeting = recipient.firstName?.trim() ? `Hi ${recipient.firstName.trim()},` : "Hi there,";
   return (
     <EmailFrame preheader={content.preheader ?? `${agent.name} shared a property with you`}>
@@ -42,6 +43,9 @@ export function BrokerPersonalEmail({
           {listing.address}, {listing.city}, {listing.stateCode} {listing.postalCode}
         </Text>
         <Text style={{ margin: "0 0 16px", fontWeight: 700 }}>{listing.priceText}</Text>
+        {description ? (
+          <Text style={{ fontSize: "16px", lineHeight: "25px" }}>{description}</Text>
+        ) : null}
         {listing.facts.map((fact) => (
           <Text key={fact.label} style={{ margin: "4px 0", fontSize: "14px" }}>
             <strong>{fact.label}:</strong> {fact.value}
