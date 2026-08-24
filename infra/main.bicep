@@ -99,7 +99,7 @@ var publicPaths = [
   '/health/ready'
   '/api/public/webhooks/resend'
   '/api/public/unsubscribe/*'
-  '/unsubscribe*'
+  '/unsubscribe'
   '/public/assets/*'
 ]
 var commonSecrets = concat([
