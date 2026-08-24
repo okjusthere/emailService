@@ -6,9 +6,7 @@ describe("client date formatting", () => {
   // Found by /qa on 2026-08-24
   // Report: .gstack/qa-reports/qa-report-marketing-homixny-com-2026-08-24.md
   it("formats an Eastern timestamp without combining incompatible Intl options", () => {
-    expect(formatEt("2026-08-24T15:59:36.343Z")).toMatch(
-      /^Aug 24, 2026, 11:59 AM (EDT|GMT-4)$/
-    );
+    expect(formatEt("2026-08-24T15:59:36.343Z")).toMatch(/^Aug 24, 2026, 11:59 AM (EDT|GMT-4)$/);
     expect(formatEt(null)).toBe("—");
   });
 });
