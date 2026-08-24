@@ -55,6 +55,8 @@ param baseUrl string
 @allowed(['disabled', 'bbo', 'fake'])
 param oneKeyProvider string = 'disabled'
 param bboListingApiBaseUrl string = ''
+@description('Comma-separated exact origins approved for BBO-hosted listing media. No wildcards or paths.')
+param oneKeyMediaAllowedOrigins string = ''
 param oneKeySyncEnabled bool = false
 @allowed(['disabled', 'openai', 'fake'])
 param aiProvider string = 'disabled'
@@ -156,6 +158,7 @@ var commonEnv = concat([
   { name: 'AUDIT_RETENTION_DAYS', value: '365' }
   { name: 'ONEKEY_PROVIDER', value: oneKeyProvider }
   { name: 'BBO_LISTING_API_BASE_URL', value: bboListingApiBaseUrl }
+  { name: 'ONEKEY_MEDIA_ALLOWED_ORIGINS', value: oneKeyMediaAllowedOrigins }
   { name: 'ONEKEY_SYNC_ENABLED', value: oneKeySyncEnabled ? 'true' : 'false' }
   { name: 'MLS_GRID_BASE_URL', value: 'https://api.mlsgrid.com/v2' }
   { name: 'MLS_GRID_ORIGINATING_SYSTEM_NAME', value: 'onekey2' }

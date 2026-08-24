@@ -422,14 +422,27 @@ describe("security boundaries", () => {
       })
     ).not.toThrow();
     expect(() => parseEnv({ ...safe, ONEKEY_PROVIDER: "bbo" })).toThrow(/BBO OneKey provider/);
-    expect(() =>
+    expect(
       parseEnv({
         ...safe,
         ONEKEY_PROVIDER: "bbo",
         BBO_LISTING_API_BASE_URL: "https://onekey.example.test/api/v1",
         BBO_MARKETING_API_KEY: "bbo-placeholder-for-structure-only",
+        ONEKEY_MEDIA_ALLOWED_ORIGINS:
+          "https://onekey.example.test,https://onekey-media.example.test",
       })
-    ).not.toThrow();
+    ).toMatchObject({
+      oneKeyMediaAllowedOrigins: [
+        "https://onekey.example.test",
+        "https://onekey-media.example.test",
+      ],
+    });
+    expect(() =>
+      parseEnv({
+        ...safe,
+        ONEKEY_MEDIA_ALLOWED_ORIGINS: "https://onekey.example.test/media",
+      })
+    ).toThrow(/Invalid media origin/);
     expect(() => parseEnv({ ...safe, AI_PROVIDER: "openai" })).toThrow(/OPENAI_API_KEY/);
     expect(() =>
       parseEnv({ ...safe, AI_PROVIDER: "openai", OPENAI_API_KEY: "openai-test-placeholder" })

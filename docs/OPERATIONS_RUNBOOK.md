@@ -62,7 +62,7 @@ Unsubscribe tokens do not use the session secret. Copy the old current value to 
 
 ## OneKey/BBO operations
 
-Keep `EMAIL_DELIVERY_MODE=disabled` while enabling `ONEKEY_PROVIDER=bbo`. Install a dedicated BBO bearer key in `bbo-marketing-api-key`, configure the HTTPS base URL and enable its Key Vault reference. In Settings:
+Keep `EMAIL_DELIVERY_MODE=disabled` while enabling `ONEKEY_PROVIDER=bbo`. Install a dedicated BBO bearer key in `bbo-marketing-api-key`, configure the HTTPS base URL and enable its Key Vault reference. If listing images are served from a different origin, set `ONEKEY_MEDIA_ALLOWED_ORIGINS` to the exact comma-separated HTTPS origins; paths, credentials, and wildcard hosts are rejected. In Settings:
 
 1. Test Connection.
 2. Run initial sync and wait for the cursor success/count.

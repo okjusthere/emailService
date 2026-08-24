@@ -14,6 +14,7 @@ param useResendSecrets = false
 param usePreviousUnsubscribeSigningSecret = false
 param oneKeyProvider = 'disabled'
 param bboListingApiBaseUrl = ''
+param oneKeyMediaAllowedOrigins = ''
 param useBboMarketingApiKey = false
 param useMlsGridAccessToken = false
 param oneKeySyncEnabled = false

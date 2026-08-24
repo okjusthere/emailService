@@ -16,6 +16,38 @@ const csvString = z
       .filter(Boolean)
   );
 
+const originCsvString = z
+  .string()
+  .default("")
+  .transform((value, ctx) => {
+    const origins: string[] = [];
+    for (const item of value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean)) {
+      try {
+        const url = new URL(item);
+        if (
+          !["https:", "http:"].includes(url.protocol) ||
+          url.username ||
+          url.password ||
+          url.pathname !== "/" ||
+          url.search ||
+          url.hash
+        )
+          throw new Error("not an origin");
+        origins.push(url.origin);
+      } catch {
+        ctx.addIssue({
+          code: "custom",
+          message: `Invalid media origin: ${item}`,
+        });
+        return z.NEVER;
+      }
+    }
+    return [...new Set(origins)];
+  });
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -66,6 +98,7 @@ const envSchema = z
     ONEKEY_PROVIDER: z.enum(["disabled", "bbo", "fake"]).default("disabled"),
     BBO_LISTING_API_BASE_URL: z.string().default(""),
     BBO_MARKETING_API_KEY: z.string().default(""),
+    ONEKEY_MEDIA_ALLOWED_ORIGINS: originCsvString,
     MLS_GRID_BASE_URL: z.string().default("https://api.mlsgrid.com/v2"),
     MLS_GRID_ACCESS_TOKEN: z.string().default(""),
     MLS_GRID_ORIGINATING_SYSTEM_NAME: z.string().default("onekey2"),
@@ -241,6 +274,7 @@ export function parseEnv(input: NodeJS.ProcessEnv) {
     oneKeyProvider: parsed.data.ONEKEY_PROVIDER,
     bboListingApiBaseUrl: parsed.data.BBO_LISTING_API_BASE_URL.replace(/\/$/, ""),
     bboMarketingApiKey: parsed.data.BBO_MARKETING_API_KEY,
+    oneKeyMediaAllowedOrigins: parsed.data.ONEKEY_MEDIA_ALLOWED_ORIGINS,
     mlsGridBaseUrl: parsed.data.MLS_GRID_BASE_URL.replace(/\/$/, ""),
     mlsGridAccessToken: parsed.data.MLS_GRID_ACCESS_TOKEN,
     mlsGridOriginatingSystemName: parsed.data.MLS_GRID_ORIGINATING_SYSTEM_NAME,
