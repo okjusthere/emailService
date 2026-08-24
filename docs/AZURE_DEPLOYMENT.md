@@ -29,7 +29,7 @@ cp infra/dev.example.bicepparam infra/dev.local.bicepparam
 
 `*.local.bicepparam` is ignored. Fill tenant/client IDs, admin emails and stable base URL. Leave `emailDeliveryMode`, `oneKeyProvider` and `aiProvider` disabled for the first deployment. Do not put PostgreSQL, Resend, BBO/MLS, OpenAI or Entra secrets in the file.
 
-Required external inputs are Azure subscription/tenant/resource groups, Entra app ID and allowed users, `marketing.homixny.com`, Resend domain/API/Webhook values, BBO read-only marketing API base/key (and MLS Grid token only if the data-ingestion boundary later requires it), a dedicated OpenAI project/key, legal postal address, alert recipient, deployment tier/HA and optional brand assets.
+Required external inputs are Azure subscription/tenant/resource groups, Entra app ID and allowed users, `marketing.homixny.com`, Resend domain/API/Webhook values, BBO read-only marketing API base/key (and MLS Grid token only if the data-ingestion boundary later requires it), either an OpenAI project/key or an Azure OpenAI deployment/key, legal postal address, alert recipient, deployment tier/HA and optional brand assets.
 
 ## Validate without deploying
 
@@ -95,7 +95,7 @@ Create secrets with the interactive ARM control-plane helper; values are read wi
 ./scripts/set-key-vault-secret.sh rg-homix-mkt-prod-eastus2 REQUIRED_KEY_VAULT_NAME openai-api-key
 ```
 
-Use a BBO key dedicated to this application with only `marketing:read` and required listing/event read scopes. `mls-grid-access-token` is wired for a future/direct licensed replication boundary but the current Homix integration uses the compliant BBO API. Create the OpenAI key in a dedicated Homix Marketing project. All are server-only Container Apps Key Vault references.
+Use a BBO key dedicated to this application with only `marketing:read` and required listing/event read scopes. `mls-grid-access-token` is wired for a future/direct licensed replication boundary but the current Homix integration uses the compliant BBO API. For Azure OpenAI, copy an existing Azure AI resource key to `openai-api-key` through the ARM helper and use the resource's `/openai/v1` endpoint plus the deployment name. All values are server-only Container Apps Key Vault references.
 
 Configure Resend Webhook URL:
 
@@ -120,16 +120,17 @@ BBO_LISTING_API_BASE_URL=https://REQUIRED_BBO_HOST
 ONEKEY_MEDIA_ALLOWED_ORIGINS=https://REQUIRED_BBO_MEDIA_HOST
 USE_BBO_MARKETING_API_KEY=true
 ONEKEY_SYNC_ENABLED=true
-AI_PROVIDER=openai
+AI_PROVIDER=azure-openai
 USE_OPENAI_API_KEY=true
-OPENAI_MODEL=gpt-5-mini
+OPENAI_MODEL=gpt-5.6-terra
+OPENAI_BASE_URL=https://REQUIRED_RESOURCE.openai.azure.com/openai/v1
 ```
 
 In Settings, Test Connection, run the initial sync, verify MLS-number and address search/import/refresh/media/recipient preview, then generate and selectively apply listing and Campaign copy. A OneKey or AI failure is noncritical to `/health/ready`; manual listing/campaign work remains available. Keep delivery disabled until these checks pass.
 
 ## DNS and custom domain
 
-First verify `listings.homixny.com` in Resend and publish its current SPF/DKIM/tracking records without overwriting the organization's existing DMARC policy. Then bind the management domain:
+First verify `updates.homixny.com` in Resend and publish its current SPF/DKIM/Return-Path records without overwriting the organization's existing DMARC policy. Then bind the management domain:
 
 ```bash
 ./scripts/configure-custom-domain.sh \
@@ -179,6 +180,7 @@ ONEKEY_SYNC_ENABLED
 AI_PROVIDER
 USE_OPENAI_API_KEY
 OPENAI_MODEL
+OPENAI_BASE_URL
 USE_ENTRA_CLIENT_SECRET
 EMAIL_DELIVERY_MODE
 EMAIL_TEST_ALLOWLIST
@@ -210,6 +212,7 @@ export EMAIL_TEST_ALLOWLIST=REQUIRED_INTERNAL_CANARY_EMAILS
 export ONEKEY_PROVIDER=disabled
 export ONEKEY_SYNC_ENABLED=false
 export AI_PROVIDER=disabled
+export OPENAI_BASE_URL=https://api.openai.com/v1
 
 ./scripts/deploy-release.sh \
   rg-homix-mkt-prod-eastus2 \
@@ -221,4 +224,4 @@ The script preserves current Web/Worker images during the Bicep update, changes/
 
 ## Live enable checklist
 
-Keep disabled until all are true: legal address, stable HTTPS base URL, verified From domain/SPF/DKIM, DMARC reviewed, tracking decision made, Reply-To tested, Webhook signature/event verified, worker heartbeat fresh, migrations current, sender verified, test allowlist send successful, suppression/unsubscribe smoke passed, recovery guard reconciled and Admin resume reason audited. Set `EMAIL_TEST_ALLOWLIST` to a reviewed comma-separated set of internal mailboxes, begin in `sandbox`, send a small canary, then deploy a revision with `EMAIL_DELIVERY_MODE=live` only after reviewing the results.
+Keep disabled until all are true: legal address, stable HTTPS base URL, verified From domain/SPF/DKIM, DMARC reviewed, tracking decision made, listing Agent Reply-To/signature tested, Webhook signature/event verified, worker heartbeat fresh, migrations current, sender verified, real AI proposal reviewed/applied, test allowlist send successful, suppression/unsubscribe smoke passed, recovery guard reconciled and Admin resume reason audited. Set `EMAIL_TEST_ALLOWLIST` to a reviewed comma-separated set of internal mailboxes, begin in `sandbox`, send a small canary, then deploy a revision with `EMAIL_DELIVERY_MODE=live` only after reviewing the results. Live mode no longer applies the sandbox allowlist; audience permissions, suppressions and sender quotas remain enforced.

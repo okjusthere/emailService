@@ -21,6 +21,7 @@ import { writeAudit } from "../audit/service.js";
 import { localDate } from "../delivery/quota.js";
 import { assertCampaignTransition, isCampaignEditable } from "./stateMachine.js";
 import { campaignInputSchema } from "./schemas.js";
+import { resolveListingAgentIdentity } from "./listingAgentIdentity.js";
 
 function priceText(listing: {
   askingPrice: Prisma.Decimal | null;
@@ -54,13 +55,12 @@ function snapshotFromCampaign(
       "Listing requires an email-safe hero image.",
       409
     );
-  const replyTo = campaign.replyToAgent?.email ?? campaign.senderProfile.fixedReplyToEmail;
-  if (!replyTo)
-    throw new DomainError(
-      "REPLY_TO_REQUIRED",
-      "A Reply-To agent or fixed sender Reply-To is required.",
-      409
-    );
+  const listingAgent = resolveListingAgentIdentity({
+    listingAgent: campaign.listing.agent,
+    legacyCampaignAgent: campaign.replyToAgent,
+    legacyFixedReplyToEmail: campaign.senderProfile.fixedReplyToEmail,
+  });
+  const replyTo = listingAgent.email;
   const facts: Array<{ label: string; value: string }> = [];
   if (campaign.listing.buildingSqFt)
     facts.push({
@@ -84,21 +84,20 @@ function snapshotFromCampaign(
       stateCode: campaign.listing.stateCode,
       postalCode: campaign.listing.postalCode,
       priceText: priceText(campaign.listing),
-      shortDescription: campaign.listing.shortDescription ?? undefined,
+      description:
+        campaign.listing.longDescription ?? campaign.listing.shortDescription ?? undefined,
       highlights: campaign.listing.highlights,
       facts: facts.slice(0, 6),
       heroUrl: hero.publicUrl,
       heroAlt: hero.altText ?? campaign.listing.title,
     },
     agent: {
-      name: campaign.replyToAgent?.displayName ?? campaign.listing.agent.displayName,
-      email: replyTo,
-      phone: campaign.replyToAgent?.phone ?? campaign.listing.agent.phone ?? undefined,
-      title: campaign.replyToAgent?.title ?? campaign.listing.agent.title ?? undefined,
-      headshotUrl:
-        campaign.replyToAgent?.headshotUrl ?? campaign.listing.agent.headshotUrl ?? undefined,
-      signatureHtml:
-        campaign.replyToAgent?.signatureHtml ?? campaign.listing.agent.signatureHtml ?? undefined,
+      name: listingAgent.name,
+      email: listingAgent.email,
+      phone: listingAgent.phone,
+      title: listingAgent.title,
+      headshotUrl: listingAgent.headshotUrl,
+      signatureHtml: listingAgent.signatureHtml,
     },
     sender: {
       fromName: campaign.senderProfile.fromName,
@@ -119,7 +118,7 @@ function snapshotFromCampaign(
       ctaUrl: campaign.ctaUrl ?? campaign.listing.listingUrl ?? "",
     },
     templateVersion:
-      campaign.templateKey === "LISTING_BRANDED" ? "listing-branded@1" : "broker-personal@1",
+      campaign.templateKey === "LISTING_BRANDED" ? "listing-branded@2" : "broker-personal@2",
   };
 }
 
@@ -215,9 +214,15 @@ export async function listCampaigns(query: unknown) {
 export async function createCampaign(body: unknown, actor: ActorContext) {
   const input = campaignInputSchema.parse(body);
   return inTransaction(async (tx) => {
+    const listing = await tx.listing.findUnique({
+      where: { id: input.listingId },
+      select: { agentId: true },
+    });
+    if (!listing) throw new DomainError("LISTING_NOT_FOUND", "Listing not found.", 404);
     const campaign = await tx.campaign.create({
       data: {
         ...input,
+        replyToAgentId: listing.agentId,
         introHtml: sanitizeIntro(input.introHtml ?? ""),
         audienceFilter: input.audienceFilter,
         createdByUserId: actor.userId,
@@ -242,7 +247,10 @@ export async function updateCampaign(
 ) {
   const input = campaignInputSchema.partial().parse(body);
   return inTransaction(async (tx) => {
-    const before = await tx.campaign.findUnique({ where: { id } });
+    const before = await tx.campaign.findUnique({
+      where: { id },
+      include: { listing: { select: { agentId: true } } },
+    });
     if (!before) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
     if (!isCampaignEditable(before.status))
       throw new DomainError(
@@ -257,10 +265,26 @@ export async function updateCampaign(
         409,
         { currentVersion: before.version }
       );
+    const listingId = input.listingId ?? before.listingId;
+    const targetListing =
+      input.listingId && input.listingId !== before.listingId
+        ? await tx.listing.findUnique({
+            where: { id: input.listingId },
+            select: { agentId: true },
+          })
+        : before.listing;
+    if (listingId && !targetListing)
+      throw new DomainError("LISTING_NOT_FOUND", "Listing not found.", 404);
+    const shouldSynchronizeReplyTo =
+      targetListing !== null &&
+      (input.listingId !== undefined ||
+        input.replyToAgentId !== undefined ||
+        before.replyToAgentId !== targetListing.agentId);
     const result = await tx.campaign.updateMany({
       where: { id, version },
       data: {
         ...input,
+        ...(shouldSynchronizeReplyTo ? { replyToAgentId: targetListing?.agentId } : {}),
         introHtml: input.introHtml === undefined ? undefined : sanitizeIntro(input.introHtml ?? ""),
         updatedByUserId: actor.userId,
         version: { increment: 1 },

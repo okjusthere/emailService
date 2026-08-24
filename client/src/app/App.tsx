@@ -37,6 +37,13 @@ type Me = {
   };
 };
 type ListResponse<T> = { items: T[]; total?: number };
+type AiStatus = {
+  enabled: boolean;
+  provider: "disabled" | "fake" | "openai" | "azure-openai";
+  model: string;
+  productionReady: boolean;
+  mode: "disabled" | "test" | "production";
+};
 
 export function App() {
   return (
@@ -387,7 +394,7 @@ type Listing = {
   agentId: string;
   status: string;
   updatedAt: string;
-  agent: { displayName: string };
+  agent: { displayName: string; email: string; phone?: string; title?: string };
   assets: Array<{
     id: string;
     thumbnailUrl?: string;
@@ -1169,7 +1176,7 @@ function OneKeyListingTools({ listing }: { listing: Listing }) {
   ]);
   const aiStatus = useQuery({
     queryKey: ["ai-status"],
-    queryFn: () => api<{ enabled: boolean; provider: string; model: string }>("/api/v2/ai/status"),
+    queryFn: () => api<AiStatus>("/api/v2/ai/status"),
   });
   const refresh = useMutation({
     mutationFn: () =>
@@ -1286,13 +1293,15 @@ function OneKeyListingTools({ listing }: { listing: Listing }) {
       <div className="notice">
         <strong>AI marketing proposal</strong>
         <span>
-          {aiStatus.data?.enabled
-            ? `${aiStatus.data.provider} · ${aiStatus.data.model}. Generation never applies automatically.`
-            : "AI is disabled; deterministic manual editing remains available."}
+          {aiStatus.data?.productionReady
+            ? `${aiStatus.data.provider} · ${aiStatus.data.model}. Review and apply selected fields before sending.`
+            : aiStatus.data?.mode === "test"
+              ? "Deterministic test copy only—not a real AI rewrite. Configure a production AI provider before sending."
+              : "AI is disabled; deterministic manual editing remains available."}
         </span>
         <button
           className="text-button"
-          disabled={!aiStatus.data?.enabled || generate.isPending}
+          disabled={!aiStatus.data?.productionReady || generate.isPending}
           onClick={() => generate.mutate()}
         >
           Generate proposal
@@ -2666,8 +2675,9 @@ function Campaigns() {
     >
       {wizard ? (
         <CampaignWizard
-          onCreated={() => {
+          onCreated={(campaign) => {
             setWizard(false);
+            setSelected(campaign.id);
             void campaigns.refetch();
           }}
         />
@@ -3186,7 +3196,7 @@ function CampaignAiAssistant({
   const [fields, setFields] = useState(["subject", "preheader", "introText", "ctaLabel"]);
   const status = useQuery({
     queryKey: ["ai-status"],
-    queryFn: () => api<{ enabled: boolean; provider: string; model: string }>("/api/v2/ai/status"),
+    queryFn: () => api<AiStatus>("/api/v2/ai/status"),
   });
   const generate = useMutation({
     mutationFn: () =>
@@ -3220,11 +3230,15 @@ function CampaignAiAssistant({
       <div className="toolbar">
         <span>
           AI copy assistant ·{" "}
-          {status.data?.enabled ? `${status.data.provider} (${status.data.model})` : "disabled"}
+          {status.data?.productionReady
+            ? `${status.data.provider} (${status.data.model})`
+            : status.data?.mode === "test"
+              ? "test copy only—not real AI"
+              : "disabled"}
         </span>
         <button
           className="text-button"
-          disabled={!status.data?.enabled || generate.isPending}
+          disabled={!status.data?.productionReady || generate.isPending}
           onClick={() => generate.mutate()}
         >
           Generate 3 variants
@@ -3285,7 +3299,7 @@ function CampaignAiAssistant({
   );
 }
 
-function CampaignWizard({ onCreated }: { onCreated: () => void }) {
+function CampaignWizard({ onCreated }: { onCreated: (campaign: Campaign) => void }) {
   const queryClient = useQueryClient();
   const [step, setStep] = useState(1);
   const [introHtml, setIntroHtml] = useState(
@@ -3295,7 +3309,6 @@ function CampaignWizard({ onCreated }: { onCreated: () => void }) {
     name: "",
     listingId: "",
     senderProfileId: "",
-    replyToAgentId: "",
     savedAudienceId: "",
     templateKey: "LISTING_BRANDED",
     subject: "",
@@ -3331,7 +3344,6 @@ function CampaignWizard({ onCreated }: { onCreated: () => void }) {
         method: "POST",
         body: JSON.stringify({
           ...form,
-          replyToAgentId: form.replyToAgentId || null,
           ctaUrl: form.ctaUrl || null,
           introHtml,
           savedAudienceId: form.savedAudienceId || null,
@@ -3443,20 +3455,21 @@ function CampaignWizard({ onCreated }: { onCreated: () => void }) {
                 ))}
               </select>
             </label>
-            <label>
-              Reply-To agent
-              <select
-                value={form.replyToAgentId}
-                onChange={(event) => fields({ replyToAgentId: event.target.value })}
-              >
-                <option value="">Use sender fallback</option>
-                {agents.data?.items.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.displayName} · {item.email}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="notice">
+              <strong>Reply-To and signature follow the listing agent</strong>
+              <span>
+                {form.listingId
+                  ? (() => {
+                      const agent = listings.data?.items.find(
+                        (item) => item.id === form.listingId
+                      )?.agent;
+                      return agent
+                        ? `${agent.displayName} · ${agent.email}`
+                        : "The listing agent will be resolved by the server.";
+                    })()
+                  : "Choose a listing first."}
+              </span>
+            </div>
           </>
         ) : null}
         {step === 4 ? (
@@ -3525,6 +3538,17 @@ function CampaignWizard({ onCreated }: { onCreated: () => void }) {
                 <b>
                   {senders.data?.items.find((item) => item.id === form.senderProfileId)?.name ??
                     "Missing"}
+                </b>
+              </span>
+              <span>
+                Listing agent
+                <b>
+                  {(() => {
+                    const agent = listings.data?.items.find(
+                      (item) => item.id === form.listingId
+                    )?.agent;
+                    return agent ? `${agent.displayName} · ${agent.email}` : "Missing";
+                  })()}
                 </b>
               </span>
               <span>
@@ -4195,7 +4219,7 @@ function IntegrationOperations() {
   });
   const ai = useQuery({
     queryKey: ["ai-status"],
-    queryFn: () => api<{ enabled: boolean; provider: string; model: string }>("/api/v2/ai/status"),
+    queryFn: () => api<AiStatus>("/api/v2/ai/status"),
   });
   const webhooks = useQuery({
     queryKey: ["webhook-operations"],
@@ -4284,9 +4308,11 @@ function IntegrationOperations() {
       <div className="notice">
         <strong>AI · {ai.data?.provider ?? "loading"}</strong>
         <span>
-          {ai.data?.enabled
-            ? `${ai.data.model} enabled`
-            : "Disabled; deterministic editing remains active"}
+          {ai.data?.productionReady
+            ? `${ai.data.model} production model enabled`
+            : ai.data?.mode === "test"
+              ? `${ai.data.model} is test-only and cannot be used for production copy`
+              : "Disabled; deterministic editing remains active"}
         </span>
       </div>
       <h3>Webhook reconciliation</h3>

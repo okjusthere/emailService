@@ -8,7 +8,7 @@ cp .env.example .env
 npm run dev
 ```
 
-Open `http://localhost:3000/admin`.
+Open `http://localhost:5173`. Vite proxies `/api` to the Express server on port 3000.
 
 ## Before Sending A PR
 
@@ -17,6 +17,7 @@ Run the local verification steps:
 ```bash
 npm run check
 npm test
+npm run infra:lint
 ```
 
 ## Notes

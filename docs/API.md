@@ -57,6 +57,8 @@ Search reads the local PostgreSQL OneKey index first, then the configured provid
 
 The production adapter calls BBO server-to-server with a bearer key. The token and raw provider responses are never returned. AI generation stores model, provider, fact hash and proposal; only enumerated selected fields are applied, and no endpoint passes contacts, recipients or secrets to the AI provider.
 
+For listing Campaigns, the server derives `replyToAgentId`, rendered signature and provider `Reply-To` from the selected listing's assigned Agent on every create/update/duplicate and preview/snapshot. A caller-supplied legacy `replyToAgentId` cannot override that identity.
+
 ## Public endpoints
 
 ```text

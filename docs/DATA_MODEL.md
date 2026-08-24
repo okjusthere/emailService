@@ -29,7 +29,7 @@ An ACTIVE listing requires a usable URL and hero image. Archiving database recor
 
 - `saved_audiences`: versioned, validated JSON DSL, estimated count and audit ownership. The compiler accepts only enumerated fields/operators and Prisma query fragments—never arbitrary SQL.
 - `sender_profiles`: stable From identity, reply policy, timezone/window/weekdays, daily/batch limits, warm-up schedule, tracking preferences, verification/readiness and default profile.
-- `campaigns`: listing/audience/sender/template selection, editable content, optimistic `version`, state machine, scheduled/started/completed timestamps, frozen `content_snapshot`, aggregate counters and test-send evidence.
+- `campaigns`: listing/audience/sender/template selection, editable content, optimistic `version`, state machine, scheduled/started/completed timestamps, frozen `content_snapshot`, aggregate counters and test-send evidence. The legacy `reply_to_agent_id` is kept for compatibility but is always synchronized to the listing's assigned Agent; rendered identity and provider Reply-To never use a different Campaign/global Agent.
 - `campaign_recipients`: immutable recipient/name/company snapshot, eligibility/suppression reason, independent `send_state`, `delivery_state`, engagement timestamps, provider ID and signed-unsubscribe-token hash.
 
 Opened/clicked timestamps never overwrite bounced/complained delivery state. Event reduction keeps earliest occurrence timestamps and the maximum provider-event timestamp, so out-of-order Webhooks do not regress state.
@@ -57,3 +57,4 @@ The default deliverability settings require a sample of 100 accepted messages, t
 4. Suppression is checked at snapshot and immediately before provider submission.
 5. Complaint/bounce state and global suppression are not undone by later delivered/opened events.
 6. Deletion is soft where historical campaign/audit integrity or public asset longevity matters.
+7. Listing Campaign email description prefers the complete marketing `long_description`; the 1000-character short description is a word-safe UI summary, not the delivered article.

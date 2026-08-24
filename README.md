@@ -7,7 +7,7 @@ Homix Realty 的房源营销邮件工作台。系统将联系人、房源、受�
 - React 管理台：Dashboard、Listings、Contacts/CSV Import、Audiences、Campaign Wizard/详情、Analytics、Settings。
 - Express `/api/v2`：Entra Easy Auth 身份映射、ADMIN/MARKETER/VIEWER RBAC、CSRF、速率限制和 mutation audit。
 - OneKey/BBO：按 MLS 号或地址搜索本地索引，通过 BBO 的合规 listing API 导入/刷新房源、复制媒体，并显式预览/导入最近 12–24 个月同邮编及相邻邮编成交经纪人受众；不存在 Homix/挂牌办公室所有权门禁。
-- AI 辅助：服务端 provider abstraction、结构化输出、只使用 allowlist 房源事实，先保存 proposal，再由用户逐字段 Apply；`AI_PROVIDER=disabled` 不影响手工 Campaign 或投递。
+- AI 辅助：支持 OpenAI 与 Azure OpenAI Responses API、结构化输出、只使用 allowlist 房源事实，先保存 proposal，再由用户逐字段 Apply；`fake` 会明确标为测试文案且不能在生产 UI 中生成。
 - Prisma/PostgreSQL：冻结的 content/recipient snapshot、全局 suppression、发送批次/尝试、Webhook inbox、配额预留和 `SKIP LOCKED` durable jobs。
 - Resend：最多 100 封的 batch、同批次稳定 idempotency key、temporary retry、uncertain manual review、signed raw-body Webhook、visible/RFC 8058 unsubscribe。
 - 资产：JPG/PNG/WebP 经过 Sharp 去 EXIF 并生成 1200/600 JPEG；PDF 保留；生产写入 Azure Blob，邮件只引用永久公开 URL。
@@ -44,8 +44,8 @@ OneKey 与 AI 同样默认禁用，不需要外部凭据即可启动。开发验
 2. 选择结果并导入或复用已有 marketing listing。
 3. 对照 source facts 审核内容；需要时生成 AI proposal，勾选字段后 Apply。
 4. 预览 BBO 返回的同邮编/相邻邮编成交经纪人，确认后导入 saved audience，或选择已有受众。
-5. 选择 sender profile 和 Reply-To agent。
-6. 生成并人工选择 AI Campaign subject/preheader/intro/CTA，预览并发送 test。
+5. 选择 verified sender profile；Reply-To 与邮件落款自动锁定为 listing Agent，Campaign 不能覆盖。
+6. 生成并人工选择 AI Campaign subject/preheader/intro/CTA，确认完整房源正文和 Agent 落款后预览并发送 test。
 7. Mark ready 后 snapshot、schedule/send；快照不随 OneKey 后续刷新而改变。
 8. 在 Campaign/Analytics 监控 accepted、delivered、bounce、complaint、manual review 与 suppression。
 

@@ -10,6 +10,7 @@ export function ListingBrandedEmail({
   recipient: RecipientMergeData;
 }) {
   const { listing, agent, company, content } = snapshot;
+  const description = listing.description ?? listing.shortDescription;
   return (
     <EmailFrame preheader={content.preheader ?? `A new listing from ${company.name}`}>
       <Section style={{ padding: "24px 32px", backgroundColor: "#173c2f" }}>
@@ -53,8 +54,8 @@ export function ListingBrandedEmail({
           {listing.priceText}
         </Text>
         {content.introHtml ? <div dangerouslySetInnerHTML={{ __html: content.introHtml }} /> : null}
-        {listing.shortDescription ? (
-          <Text style={{ fontSize: "16px", lineHeight: "25px" }}>{listing.shortDescription}</Text>
+        {description ? (
+          <Text style={{ fontSize: "16px", lineHeight: "25px" }}>{description}</Text>
         ) : null}
         <Section style={{ margin: "22px 0", padding: "16px", backgroundColor: "#f4f1eb" }}>
           {listing.facts.map((fact) => (
@@ -93,9 +94,11 @@ export function ListingBrandedEmail({
         </Button>
         <Hr style={{ borderColor: "#ddd7cc", margin: "28px 0" }} />
         <Text style={{ marginBottom: "4px", fontWeight: 700 }}>{agent.name}</Text>
+        {agent.title ? (
+          <Text style={{ margin: "0 0 4px", color: "#55615b" }}>{agent.title}</Text>
+        ) : null}
         <Text style={{ margin: 0, color: "#55615b" }}>
-          {agent.title ? `${agent.title} · ` : ""}
-          <Link href={`mailto:${agent.email}`}>{agent.email}</Link>
+          {company.name} · <Link href={`mailto:${agent.email}`}>{agent.email}</Link>
           {agent.phone ? ` · ${agent.phone}` : ""}
         </Text>
       </Section>

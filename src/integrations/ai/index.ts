@@ -13,11 +13,15 @@ export function setAiProviderForTests(provider?: AiCopyProvider) {
 export function getAiProvider(): AiCopyProvider {
   if (override) return override;
   if (config.aiProvider === "fake") return new FakeAiProvider();
-  if (config.aiProvider === "openai")
+  if (["openai", "azure-openai"].includes(config.aiProvider))
     return new OpenAiCopyProvider(
       config.openAiApiKey,
       config.openAiModel,
-      config.aiRequestTimeoutMs
+      config.aiRequestTimeoutMs,
+      {
+        baseUrl: config.openAiBaseUrl,
+        authMode: config.aiProvider === "azure-openai" ? "api-key" : "bearer",
+      }
     );
   throw new DomainError(
     "AI_DISABLED",

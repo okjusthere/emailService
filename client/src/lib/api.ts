@@ -34,8 +34,11 @@ export function formatEt(value?: string | null): string {
   if (!value) return "—";
   return new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
-    dateStyle: "medium",
-    timeStyle: "short",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
     timeZoneName: "short",
   }).format(new Date(value));
 }

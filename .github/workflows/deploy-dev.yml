@@ -44,6 +44,7 @@ jobs:
       AI_PROVIDER: ${{ vars.AI_PROVIDER || 'disabled' }}
       USE_OPENAI_API_KEY: ${{ vars.USE_OPENAI_API_KEY || 'false' }}
       OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5-mini' }}
+      OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL || 'https://api.openai.com/v1' }}
       USE_ENTRA_CLIENT_SECRET: ${{ vars.USE_ENTRA_CLIENT_SECRET }}
       EMAIL_DELIVERY_MODE: disabled
       DEPLOYMENT_TIER: ${{ vars.DEPLOYMENT_TIER || 'starter' }}

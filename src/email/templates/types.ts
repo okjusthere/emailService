@@ -7,6 +7,8 @@ export interface ListingEmailSnapshot {
     stateCode: string;
     postalCode: string;
     priceText: string;
+    description?: string;
+    /** @deprecated Retained so archived V1 snapshots remain renderable. */
     shortDescription?: string;
     highlights: string[];
     facts: Array<{ label: string; value: string }>;
