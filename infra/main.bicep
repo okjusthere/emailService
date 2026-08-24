@@ -49,6 +49,8 @@ param unsubscribePreviousSigningSecretExpiresAt string = ''
 param useEntraClientSecret bool = false
 @allowed(['disabled', 'sandbox', 'live'])
 param emailDeliveryMode string = 'disabled'
+@description('Comma-separated normalized recipient addresses allowed while delivery is in sandbox mode.')
+param emailTestAllowlist string = ''
 param baseUrl string
 @allowed(['disabled', 'bbo', 'fake'])
 param oneKeyProvider string = 'disabled'
@@ -137,6 +139,7 @@ var commonEnv = concat([
   { name: 'DEV_BYPASS_AUTH', value: 'false' }
   { name: 'EMAIL_PROVIDER', value: 'resend' }
   { name: 'EMAIL_DELIVERY_MODE', value: emailDeliveryMode }
+  { name: 'EMAIL_TEST_ALLOWLIST', value: emailTestAllowlist }
   { name: 'STORAGE_PROVIDER', value: 'azure' }
   { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
   { name: 'AZURE_STORAGE_ACCOUNT_URL', value: 'https://${storage.name}.blob.${az.environment().suffixes.storage}' }

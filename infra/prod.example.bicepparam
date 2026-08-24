@@ -11,6 +11,7 @@ param bootstrapAdminEmails = 'admin@homixny.com'
 param companyPostalAddress = 'REPLACE_REAL_POSTAL_ADDRESS'
 param alertEmail = 'REPLACE_ALERT_EMAIL'
 param emailDeliveryMode = 'disabled'
+param emailTestAllowlist = 'REPLACE_INTERNAL_CANARY_EMAIL'
 param useResendSecrets = false
 param usePreviousUnsubscribeSigningSecret = false
 param oneKeyProvider = 'disabled'

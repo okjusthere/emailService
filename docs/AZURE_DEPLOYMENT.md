@@ -175,6 +175,7 @@ USE_OPENAI_API_KEY
 OPENAI_MODEL
 USE_ENTRA_CLIENT_SECRET
 EMAIL_DELIVERY_MODE
+EMAIL_TEST_ALLOWLIST
 ```
 
 No Azure client secret is required by GitHub. Protect `production` with required reviewers. `deploy-prod.yml` is manual or `v*` tag driven, stores Bicep what-if as an artifact, and uses an immutable SHA/version tag.
@@ -199,6 +200,7 @@ export STORAGE_SKU_NAME=Standard_LRS
 export USE_RESEND_SECRETS=true
 export USE_ENTRA_CLIENT_SECRET=true
 export EMAIL_DELIVERY_MODE=disabled
+export EMAIL_TEST_ALLOWLIST=REQUIRED_INTERNAL_CANARY_EMAILS
 export ONEKEY_PROVIDER=disabled
 export ONEKEY_SYNC_ENABLED=false
 export AI_PROVIDER=disabled
@@ -213,4 +215,4 @@ The script preserves current Web/Worker images during the Bicep update, changes/
 
 ## Live enable checklist
 
-Keep disabled until all are true: legal address, stable HTTPS base URL, verified From domain/SPF/DKIM, DMARC reviewed, tracking decision made, Reply-To tested, Webhook signature/event verified, worker heartbeat fresh, migrations current, sender verified, test allowlist send successful, suppression/unsubscribe smoke passed, recovery guard reconciled and Admin resume reason audited. Begin in `sandbox`, send a small canary, then deploy a revision with `EMAIL_DELIVERY_MODE=live`.
+Keep disabled until all are true: legal address, stable HTTPS base URL, verified From domain/SPF/DKIM, DMARC reviewed, tracking decision made, Reply-To tested, Webhook signature/event verified, worker heartbeat fresh, migrations current, sender verified, test allowlist send successful, suppression/unsubscribe smoke passed, recovery guard reconciled and Admin resume reason audited. Set `EMAIL_TEST_ALLOWLIST` to a reviewed comma-separated set of internal mailboxes, begin in `sandbox`, send a small canary, then deploy a revision with `EMAIL_DELIVERY_MODE=live` only after reviewing the results.
