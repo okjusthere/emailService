@@ -264,7 +264,7 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: 'kv-homix-${environment}-${uniqueSuffix}'
   location: location
   tags: tags
-  properties: { tenantId: subscription().tenantId, enableRbacAuthorization: true, enablePurgeProtection: environment == 'prod', enableSoftDelete: true, softDeleteRetentionInDays: 90, publicNetworkAccess: 'Disabled', sku: { family: 'A', name: 'standard' } }
+  properties: union({ tenantId: subscription().tenantId, enableRbacAuthorization: true, enableSoftDelete: true, softDeleteRetentionInDays: 90, publicNetworkAccess: 'Disabled', sku: { family: 'A', name: 'standard' } }, environment == 'prod' ? { enablePurgeProtection: true } : {})
 }
 resource vaultDns 'Microsoft.Network/privateDnsZones@2024-06-01' = { name: 'privatelink.vaultcore.azure.net', location: 'global', tags: tags }
 resource vaultDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = { parent: vaultDns, name: 'link-${namePrefix}', location: 'global', properties: { virtualNetwork: { id: vnet.id }, registrationEnabled: false } }
