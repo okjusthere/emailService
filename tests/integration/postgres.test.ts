@@ -1615,6 +1615,26 @@ describe("PostgreSQL delivery invariants", () => {
       reconciliationAttempts: 1,
       nextReconcileAt: expect.any(Date),
     });
+
+    const testSendEvent = await prisma.emailEvent.create({
+      data: {
+        webhookId: `test-send-${randomUUID()}`,
+        eventType: "email.delivered",
+        providerEmailId: `test-send-${randomUUID()}`,
+        eventCreatedAt: new Date(),
+        payload: { data: { tags: { campaign_id: fixture.campaign.id, test: "true" } } },
+      },
+    });
+    await processWebhookEvent(testSendEvent.id);
+    expect(
+      await prisma.emailEvent.findUniqueOrThrow({ where: { id: testSendEvent.id } })
+    ).toMatchObject({
+      processedAt: expect.any(Date),
+      processingError: null,
+      reconciliationStatus: "PROCESSED",
+      reconciliationAttempts: 0,
+      nextReconcileAt: null,
+    });
   });
 
   it("ingests a signed webhook once and deduplicates replay", async () => {

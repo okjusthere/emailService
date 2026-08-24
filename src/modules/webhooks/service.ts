@@ -4,6 +4,15 @@ import type { EmailProvider } from "../../email/providers/EmailProvider.js";
 import { upsertSuppression } from "../suppressions/domain.js";
 import { recomputeCampaignStats } from "../analytics/service.js";
 
+function isTestSendEvent(payload: Prisma.JsonValue): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const data = payload.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  const tags = data.tags;
+  if (!tags || typeof tags !== "object" || Array.isArray(tags)) return false;
+  return tags.test === "true" || tags.test === true;
+}
+
 export async function ingestWebhook(
   provider: EmailProvider,
   input: { rawBody: string; headers: Record<string, string | undefined> }
@@ -69,6 +78,18 @@ export async function processWebhookEvent(eventId: string): Promise<void> {
           })
         : null;
     if (!recipientMatch) {
+      if (isTestSendEvent(event.payload)) {
+        await tx.emailEvent.update({
+          where: { id: event.id },
+          data: {
+            reconciliationStatus: "PROCESSED",
+            processedAt: new Date(),
+            nextReconcileAt: null,
+            processingError: null,
+          },
+        });
+        return null;
+      }
       const retryDelaysMs = [30_000, 120_000, 600_000, 1_800_000, 7_200_000];
       const attempt = event.reconciliationAttempts + 1;
       const delayMs = retryDelaysMs[attempt - 1];
