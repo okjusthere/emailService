@@ -93,9 +93,11 @@ export function ListingBrandedEmail({
         </Button>
         <Hr style={{ borderColor: "#ddd7cc", margin: "28px 0" }} />
         <Text style={{ marginBottom: "4px", fontWeight: 700 }}>{agent.name}</Text>
+        {agent.title ? (
+          <Text style={{ margin: "0 0 4px", color: "#55615b" }}>{agent.title}</Text>
+        ) : null}
         <Text style={{ margin: 0, color: "#55615b" }}>
-          {agent.title ? `${agent.title} · ` : ""}
-          <Link href={`mailto:${agent.email}`}>{agent.email}</Link>
+          {company.name} · <Link href={`mailto:${agent.email}`}>{agent.email}</Link>
           {agent.phone ? ` · ${agent.phone}` : ""}
         </Text>
       </Section>

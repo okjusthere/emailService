@@ -75,7 +75,13 @@ export function BrokerPersonalEmail({
           <br />
           {agent.name}
           <br />
-          <Link href={`mailto:${agent.email}`}>{agent.email}</Link>
+          {agent.title ? (
+            <>
+              {agent.title}
+              <br />
+            </>
+          ) : null}
+          {company.name} · <Link href={`mailto:${agent.email}`}>{agent.email}</Link>
           {agent.phone ? (
             <>
               <br />

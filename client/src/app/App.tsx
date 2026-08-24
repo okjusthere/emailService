@@ -387,7 +387,7 @@ type Listing = {
   agentId: string;
   status: string;
   updatedAt: string;
-  agent: { displayName: string };
+  agent: { displayName: string; email: string; phone?: string; title?: string };
   assets: Array<{
     id: string;
     thumbnailUrl?: string;
@@ -2666,8 +2666,9 @@ function Campaigns() {
     >
       {wizard ? (
         <CampaignWizard
-          onCreated={() => {
+          onCreated={(campaign) => {
             setWizard(false);
+            setSelected(campaign.id);
             void campaigns.refetch();
           }}
         />
@@ -3285,7 +3286,7 @@ function CampaignAiAssistant({
   );
 }
 
-function CampaignWizard({ onCreated }: { onCreated: () => void }) {
+function CampaignWizard({ onCreated }: { onCreated: (campaign: Campaign) => void }) {
   const queryClient = useQueryClient();
   const [step, setStep] = useState(1);
   const [introHtml, setIntroHtml] = useState(
@@ -3295,7 +3296,6 @@ function CampaignWizard({ onCreated }: { onCreated: () => void }) {
     name: "",
     listingId: "",
     senderProfileId: "",
-    replyToAgentId: "",
     savedAudienceId: "",
     templateKey: "LISTING_BRANDED",
     subject: "",
@@ -3331,7 +3331,6 @@ function CampaignWizard({ onCreated }: { onCreated: () => void }) {
         method: "POST",
         body: JSON.stringify({
           ...form,
-          replyToAgentId: form.replyToAgentId || null,
           ctaUrl: form.ctaUrl || null,
           introHtml,
           savedAudienceId: form.savedAudienceId || null,
@@ -3443,20 +3442,21 @@ function CampaignWizard({ onCreated }: { onCreated: () => void }) {
                 ))}
               </select>
             </label>
-            <label>
-              Reply-To agent
-              <select
-                value={form.replyToAgentId}
-                onChange={(event) => fields({ replyToAgentId: event.target.value })}
-              >
-                <option value="">Use sender fallback</option>
-                {agents.data?.items.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.displayName} · {item.email}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="notice">
+              <strong>Reply-To and signature follow the listing agent</strong>
+              <span>
+                {form.listingId
+                  ? (() => {
+                      const agent = listings.data?.items.find(
+                        (item) => item.id === form.listingId
+                      )?.agent;
+                      return agent
+                        ? `${agent.displayName} · ${agent.email}`
+                        : "The listing agent will be resolved by the server.";
+                    })()
+                  : "Choose a listing first."}
+              </span>
+            </div>
           </>
         ) : null}
         {step === 4 ? (
@@ -3525,6 +3525,17 @@ function CampaignWizard({ onCreated }: { onCreated: () => void }) {
                 <b>
                   {senders.data?.items.find((item) => item.id === form.senderProfileId)?.name ??
                     "Missing"}
+                </b>
+              </span>
+              <span>
+                Listing agent
+                <b>
+                  {(() => {
+                    const agent = listings.data?.items.find(
+                      (item) => item.id === form.listingId
+                    )?.agent;
+                    return agent ? `${agent.displayName} · ${agent.email}` : "Missing";
+                  })()}
                 </b>
               </span>
               <span>
