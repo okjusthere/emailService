@@ -152,7 +152,7 @@ var commonEnv = concat([
   { name: 'AUDIT_RETENTION_DAYS', value: '365' }
   { name: 'ONEKEY_PROVIDER', value: oneKeyProvider }
   { name: 'BBO_LISTING_API_BASE_URL', value: bboListingApiBaseUrl }
-  { name: 'ONEKEY_SYNC_ENABLED', value: string(oneKeySyncEnabled) }
+  { name: 'ONEKEY_SYNC_ENABLED', value: oneKeySyncEnabled ? 'true' : 'false' }
   { name: 'MLS_GRID_BASE_URL', value: 'https://api.mlsgrid.com/v2' }
   { name: 'MLS_GRID_ORIGINATING_SYSTEM_NAME', value: 'onekey2' }
   { name: 'AI_PROVIDER', value: aiProvider }
