@@ -12,7 +12,6 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
     publicNetworkAccess: 'Enabled'
     policies: {
       quarantinePolicy: { status: 'disabled' }
-      retentionPolicy: { days: 7, status: 'enabled' }
       trustPolicy: { type: 'Notary', status: 'disabled' }
     }
   }
