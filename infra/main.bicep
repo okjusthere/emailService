@@ -52,6 +52,10 @@ param emailDeliveryMode string = 'disabled'
 @description('Comma-separated normalized recipient addresses allowed while delivery is in sandbox mode.')
 param emailTestAllowlist string = ''
 param baseUrl string
+@description('Optional Container App custom domain. Leave empty until DNS validation records exist.')
+param customDomainName string = ''
+@description('Managed certificate resource name for customDomainName. Required when customDomainName is set.')
+param customDomainManagedCertificateName string = ''
 @allowed(['disabled', 'bbo', 'fake'])
 param oneKeyProvider string = 'disabled'
 param bboListingApiBaseUrl string = ''
@@ -320,6 +324,17 @@ resource containerEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
+resource customDomainManagedCertificate 'Microsoft.App/managedEnvironments/managedCertificates@2024-03-01' = if (!empty(customDomainName) && !empty(customDomainManagedCertificateName)) {
+  parent: containerEnvironment
+  name: customDomainManagedCertificateName
+  location: location
+  tags: tags
+  properties: {
+    subjectName: customDomainName
+    domainControlValidation: 'CNAME'
+  }
+}
+
 resource web 'Microsoft.App/containerApps@2024-03-01' = {
   name: 'ca-${namePrefix}-web'
   location: location
@@ -329,7 +344,17 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
     managedEnvironmentId: containerEnvironment.id
     configuration: {
       activeRevisionsMode: 'Single'
-      ingress: { external: true, targetPort: 3000, transport: 'auto', allowInsecure: false }
+      ingress: {
+        external: true
+        targetPort: 3000
+        transport: 'auto'
+        allowInsecure: false
+        customDomains: !empty(customDomainName) && !empty(customDomainManagedCertificateName) ? [{
+          name: customDomainName
+          bindingType: 'SniEnabled'
+          certificateId: resourceId('Microsoft.App/managedEnvironments/managedCertificates', containerEnvironment.name, customDomainManagedCertificateName)
+        }] : []
+      }
       registries: [{ server: registry.properties.loginServer, identity: identity.id }]
       secrets: commonSecrets
     }
@@ -347,7 +372,7 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
       scale: { minReplicas: webMinReplicas, maxReplicas: webMaxReplicas, rules: [{ name: 'http', http: { metadata: { concurrentRequests: '50' } } }] }
     }
   }
-  dependsOn: [keyVaultRole, blobRole, acrPullRole, storageDnsGroup, vaultDnsGroup, database, databaseUrlSecret, directDatabaseUrlSecret, sessionSecret, unsubscribeSigningSecretResource, unsubscribePreviousSigningSecretResource, bboMarketingApiKeySecret, mlsGridAccessTokenSecret, openAiApiKeySecret]
+  dependsOn: [keyVaultRole, blobRole, acrPullRole, storageDnsGroup, vaultDnsGroup, database, databaseUrlSecret, directDatabaseUrlSecret, sessionSecret, unsubscribeSigningSecretResource, unsubscribePreviousSigningSecretResource, bboMarketingApiKeySecret, mlsGridAccessTokenSecret, openAiApiKeySecret, customDomainManagedCertificate]
 }
 
 resource worker 'Microsoft.App/containerApps@2024-03-01' = {
