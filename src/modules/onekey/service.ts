@@ -249,6 +249,7 @@ export async function importOneKeyListing(sourceKey: string, agentId: string, ac
         shortDescription: summarizePublicRemarks(item.publicRemarks),
         longDescription: item.publicRemarks,
         highlights: [],
+        listingUrl: config.companyListingsUrl,
         externalId: item.sourceKey,
         mlsId: item.listingId,
         isExclusive: false,

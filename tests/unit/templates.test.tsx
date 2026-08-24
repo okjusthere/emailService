@@ -64,5 +64,8 @@ describe.each(["LISTING_BRANDED", "BROKER_PERSONAL"] as const)("%s template", (t
     expect(result.html).not.toMatch(/script|onerror/i);
     expect(result.text).toContain("42 Harbor Avenue");
     expect(result.text).toContain("$2,450,000");
+    expect(result.html.match(/href="https:\/\/homixny\.com\/listings\/42-harbor"/g)).toHaveLength(
+      3
+    );
   });
 });

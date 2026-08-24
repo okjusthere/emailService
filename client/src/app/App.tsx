@@ -28,6 +28,7 @@ import { api, formatEt } from "../lib/api.js";
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 15_000, retry: 1 } },
 });
+const HOMIX_LISTINGS_URL = "https://www.homixny.com/listings";
 type Me = {
   user: {
     id: string;
@@ -3313,7 +3314,7 @@ function CampaignWizard({ onCreated }: { onCreated: (campaign: Campaign) => void
     templateKey: "LISTING_BRANDED",
     subject: "",
     ctaLabel: "View Listing",
-    ctaUrl: "",
+    ctaUrl: HOMIX_LISTINGS_URL,
   });
   const listings = useQuery({
     queryKey: ["listings-options"],
@@ -3380,6 +3381,32 @@ function CampaignWizard({ onCreated }: { onCreated: (campaign: Campaign) => void
               Campaign name
               <input value={form.name} onChange={(event) => fields({ name: event.target.value })} />
             </label>
+            <label>
+              Choose an imported listing
+              <select
+                value={form.listingId}
+                onChange={(event) => fields({ listingId: event.target.value })}
+              >
+                <option value="">Select a listing</option>
+                {listings.data?.items
+                  .filter((item) => ["DRAFT", "ACTIVE"].includes(item.status))
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.title} · {item.status}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            {form.listingId &&
+            listings.data?.items.find((item) => item.id === form.listingId)?.status !== "ACTIVE" ? (
+              <div className="notice warning">
+                <strong>This listing is not active yet.</strong>
+                <span>You can prepare the campaign now. Activate the listing before sending.</span>
+              </div>
+            ) : null}
+            <p className="fine-print">
+              Need a new listing? Search OneKey by MLS number or address below.
+            </p>
             <OneKeyImportPanel
               compact
               agents={agents.data?.items ?? []}
@@ -3388,22 +3415,6 @@ function CampaignWizard({ onCreated }: { onCreated: (campaign: Campaign) => void
                 void queryClient.invalidateQueries({ queryKey: ["listings-options"] });
               }}
             />
-            <label>
-              Active listing
-              <select
-                value={form.listingId}
-                onChange={(event) => fields({ listingId: event.target.value })}
-              >
-                <option value="">Select a listing</option>
-                {listings.data?.items
-                  .filter((item) => item.status === "ACTIVE")
-                  .map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.title}
-                    </option>
-                  ))}
-              </select>
-            </label>
           </>
         ) : null}
         {step === 2 ? (

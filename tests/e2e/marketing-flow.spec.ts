@@ -128,7 +128,17 @@ test("admin completes a listing campaign and observes delivery", async ({ page }
     source: "ONEKEY",
     sourceKey: "KEY900000001",
     status: "DRAFT",
+    listingUrl: "https://www.homixny.com/listings",
   });
+
+  await page.goto("/campaigns");
+  await page.getByRole("button", { name: "New campaign" }).click();
+  const importedListing = page.getByLabel("Choose an imported listing");
+  await expect(importedListing.getByRole("option", { name: /DRAFT/ })).toContainText(listing.title);
+  await importedListing.selectOption(listing.id);
+  await expect(importedListing).toHaveValue(listing.id);
+  await page.getByRole("button", { name: "Content" }).click();
+  await expect(page.getByLabel("CTA URL")).toHaveValue("https://www.homixny.com/listings");
 
   const listingReview = await api.get(`/api/v2/onekey/listings/${listing.sourceKey}`);
   expect(listingReview.ok(), await listingReview.text()).toBeTruthy();
