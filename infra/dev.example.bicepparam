@@ -9,6 +9,7 @@ param entraClientId = 'REPLACE_APP_CLIENT_ID'
 param baseUrl = 'https://REPLACE_CONTAINER_APP_FQDN'
 param bootstrapAdminEmails = 'admin@homixny.com'
 param emailDeliveryMode = 'disabled'
+param emailTestAllowlist = 'admin@homixny.com'
 param useResendSecrets = false
 param usePreviousUnsubscribeSigningSecret = false
 param oneKeyProvider = 'disabled'
