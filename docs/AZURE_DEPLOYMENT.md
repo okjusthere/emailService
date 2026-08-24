@@ -105,6 +105,8 @@ https://marketing.homixny.com/api/public/webhooks/resend
 
 Subscribe to sent/delivered/delivery-delayed/failed/bounced/complained/suppressed/opened/clicked events. For rotation, write the old value as `resend-webhook-previous-secret`, deploy with `USE_PREVIOUS_RESEND_WEBHOOK_SECRET=true` plus an ISO `RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT`, then set the flag false after the overlap and verification.
 
+For the Container App management hostname, deploy once without a custom-domain parameter, publish the Azure CNAME/TXT validation records, create or confirm the managed certificate, and then set both `HOMIX_CUSTOM_DOMAIN` and `AZURE_MANAGED_CERTIFICATE_NAME`. Subsequent Bicep deployments manage the SNI binding and no longer remove it.
+
 For unsubscribe rotation, write the old value as `unsubscribe-previous-signing-secret`, write the new current `unsubscribe-signing-secret`, and deploy with `USE_PREVIOUS_UNSUBSCRIBE_SIGNING_SECRET=true` plus `UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET_EXPIRES_AT`. Disable the previous reference after the overlap. This secret is never shared with `SESSION_SECRET`.
 
 ## Enable OneKey and AI while delivery stays disabled
@@ -154,6 +156,8 @@ AZURE_ACR_NAME
 ENTRA_CLIENT_ID
 HOMIX_BASE_URL
 BOOTSTRAP_ADMIN_EMAILS
+HOMIX_CUSTOM_DOMAIN
+AZURE_MANAGED_CERTIFICATE_NAME
 COMPANY_POSTAL_ADDRESS
 ALERT_EMAIL
 DEPLOYMENT_TIER

@@ -37,6 +37,7 @@ import {
 import { upsertSuppression } from "../../src/modules/suppressions/domain.js";
 import { getPrivateObjectStorage } from "../../src/storage/PrivateObjectStorage.js";
 import { completeClaimedJob, failClaimedJob } from "../../src/worker/jobRunner.js";
+import { seedDatabase } from "../../prisma/seedData.js";
 
 const frozenContent: ListingEmailSnapshot = {
   listing: {
@@ -340,6 +341,31 @@ describe("PostgreSQL delivery invariants", () => {
     expect(await prisma.market.count()).toBeGreaterThanOrEqual(7);
     expect(await prisma.tag.count()).toBeGreaterThanOrEqual(5);
     expect(await prisma.senderProfile.count({ where: { isDefault: true } })).toBe(1);
+  });
+
+  it("preserves an operator-configured default sender when reseeded", async () => {
+    const configured = await prisma.senderProfile.findFirstOrThrow({ where: { isDefault: true } });
+    await prisma.senderProfile.update({
+      where: { id: configured.id },
+      data: {
+        fromEmail: "listings@updates.homixny.com",
+        fromEmailNormalized: "listings@updates.homixny.com",
+        domain: "updates.homixny.com",
+        verificationStatus: "VERIFIED",
+      },
+    });
+
+    await seedDatabase(prisma);
+
+    await expect(
+      prisma.senderProfile.findUniqueOrThrow({ where: { id: configured.id } })
+    ).resolves.toMatchObject({
+      fromEmail: "listings@updates.homixny.com",
+      domain: "updates.homixny.com",
+      verificationStatus: "VERIFIED",
+      isDefault: true,
+    });
+    expect(await prisma.senderProfile.count()).toBe(1);
   });
 
   it("marks a malformed import failed and retries processed rows idempotently", async () => {
