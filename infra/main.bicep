@@ -62,9 +62,10 @@ param bboListingApiBaseUrl string = ''
 @description('Comma-separated exact origins approved for BBO-hosted listing media. No wildcards or paths.')
 param oneKeyMediaAllowedOrigins string = ''
 param oneKeySyncEnabled bool = false
-@allowed(['disabled', 'openai', 'fake'])
+@allowed(['disabled', 'openai', 'azure-openai', 'fake'])
 param aiProvider string = 'disabled'
 param openAiModel string = 'gpt-5-mini'
+param openAiBaseUrl string = 'https://api.openai.com/v1'
 param bootstrapAdminEmails string
 param companyPostalAddress string = 'REQUIRED_BEFORE_LIVE_SEND'
 param alertEmail string = ''
@@ -168,6 +169,7 @@ var commonEnv = concat([
   { name: 'MLS_GRID_ORIGINATING_SYSTEM_NAME', value: 'onekey2' }
   { name: 'AI_PROVIDER', value: aiProvider }
   { name: 'OPENAI_MODEL', value: openAiModel }
+  { name: 'OPENAI_BASE_URL', value: openAiBaseUrl }
 ], useResendSecrets ? [{ name: 'RESEND_API_KEY', secretRef: 'resend-api-key' }, { name: 'RESEND_WEBHOOK_SECRET', secretRef: 'resend-webhook-secret' }] : [], usePreviousResendWebhookSecret ? [{ name: 'RESEND_WEBHOOK_PREVIOUS_SECRET', secretRef: 'resend-webhook-previous-secret' }, { name: 'RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT', value: resendWebhookPreviousSecretExpiresAt }] : [], usePreviousUnsubscribeSigningSecret ? [{ name: 'UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET', secretRef: 'unsubscribe-previous-signing-secret' }, { name: 'UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET_EXPIRES_AT', value: unsubscribePreviousSigningSecretExpiresAt }] : [], useBboMarketingApiKey ? [{ name: 'BBO_MARKETING_API_KEY', secretRef: 'bbo-marketing-api-key' }] : [], useMlsGridAccessToken ? [{ name: 'MLS_GRID_ACCESS_TOKEN', secretRef: 'mls-grid-access-token' }] : [], useOpenAiApiKey ? [{ name: 'OPENAI_API_KEY', secretRef: 'openai-api-key' }] : [])
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {

@@ -106,9 +106,10 @@ const envSchema = z
     ONEKEY_SYNC_PAGE_SIZE: z.coerce.number().int().min(1).max(500).default(100),
     ONEKEY_SYNC_STATUSES: z.string().default("Active,Coming Soon,Pending"),
     ONEKEY_MEDIA_LIMIT: z.coerce.number().int().min(1).max(25).default(25),
-    AI_PROVIDER: z.enum(["disabled", "openai", "fake"]).default("disabled"),
+    AI_PROVIDER: z.enum(["disabled", "openai", "azure-openai", "fake"]).default("disabled"),
     OPENAI_API_KEY: z.string().default(""),
     OPENAI_MODEL: z.string().default("gpt-5-mini"),
+    OPENAI_BASE_URL: z.url().default("https://api.openai.com/v1"),
     AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
     AI_RATE_LIMIT_PER_HOUR: z.coerce.number().int().min(1).max(1000).default(30),
   })
@@ -210,13 +211,36 @@ const envSchema = z
         message: "The BBO OneKey provider requires its base URL and API key",
       });
     }
-    if (env.AI_PROVIDER === "openai" && !env.OPENAI_API_KEY) {
+    if (["openai", "azure-openai"].includes(env.AI_PROVIDER) && !env.OPENAI_API_KEY) {
       ctx.addIssue({
         code: "custom",
         path: ["OPENAI_API_KEY"],
         message: "The OpenAI AI provider requires OPENAI_API_KEY",
       });
     }
+    if (env.AI_PROVIDER === "azure-openai") {
+      const endpoint = new URL(env.OPENAI_BASE_URL);
+      if (
+        endpoint.protocol !== "https:" ||
+        !endpoint.hostname.endsWith(".openai.azure.com") ||
+        !/^\/openai\/v1\/?$/.test(endpoint.pathname)
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: ["OPENAI_BASE_URL"],
+          message: "Azure OpenAI requires https://<resource>.openai.azure.com/openai/v1",
+        });
+    }
+    if (
+      env.NODE_ENV === "production" &&
+      env.AI_PROVIDER === "openai" &&
+      new URL(env.OPENAI_BASE_URL).hostname !== "api.openai.com"
+    )
+      ctx.addIssue({
+        code: "custom",
+        path: ["OPENAI_BASE_URL"],
+        message: "Production OpenAI keys may only be sent to api.openai.com",
+      });
   });
 
 export type AppConfig = ReturnType<typeof parseEnv>;
@@ -287,6 +311,7 @@ export function parseEnv(input: NodeJS.ProcessEnv) {
     aiProvider: parsed.data.AI_PROVIDER,
     openAiApiKey: parsed.data.OPENAI_API_KEY,
     openAiModel: parsed.data.OPENAI_MODEL,
+    openAiBaseUrl: parsed.data.OPENAI_BASE_URL.replace(/\/$/, ""),
     aiRequestTimeoutMs: parsed.data.AI_REQUEST_TIMEOUT_MS,
     aiRateLimitPerHour: parsed.data.AI_RATE_LIMIT_PER_HOUR,
   } as const;

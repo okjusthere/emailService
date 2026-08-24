@@ -40,7 +40,11 @@ export class OpenAiCopyProvider implements AiCopyProvider {
   constructor(
     private readonly apiKey: string,
     readonly model: string,
-    private readonly timeoutMs: number
+    private readonly timeoutMs: number,
+    private readonly options: {
+      baseUrl?: string;
+      authMode?: "bearer" | "api-key";
+    } = {}
   ) {}
 
   private async generate(
@@ -51,21 +55,27 @@ export class OpenAiCopyProvider implements AiCopyProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const response = await fetch("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: this.model,
-          store: false,
-          instructions: baseInstructions,
-          input: JSON.stringify(prompt),
-          text: { format: { type: "json_schema", name, strict: true, schema } },
-        }),
-        signal: controller.signal,
-      });
+      const authMode = this.options.authMode ?? "bearer";
+      const response = await fetch(
+        `${(this.options.baseUrl ?? "https://api.openai.com/v1").replace(/\/$/, "")}/responses`,
+        {
+          method: "POST",
+          headers: {
+            ...(authMode === "api-key"
+              ? { "api-key": this.apiKey }
+              : { Authorization: `Bearer ${this.apiKey}` }),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: this.model,
+            store: false,
+            instructions: baseInstructions,
+            input: JSON.stringify(prompt),
+            text: { format: { type: "json_schema", name, strict: true, schema } },
+          }),
+          signal: controller.signal,
+        }
+      );
       if (!response.ok)
         throw new DomainError(
           "AI_PROVIDER_FAILED",

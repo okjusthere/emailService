@@ -37,6 +37,13 @@ type Me = {
   };
 };
 type ListResponse<T> = { items: T[]; total?: number };
+type AiStatus = {
+  enabled: boolean;
+  provider: "disabled" | "fake" | "openai" | "azure-openai";
+  model: string;
+  productionReady: boolean;
+  mode: "disabled" | "test" | "production";
+};
 
 export function App() {
   return (
@@ -1169,7 +1176,7 @@ function OneKeyListingTools({ listing }: { listing: Listing }) {
   ]);
   const aiStatus = useQuery({
     queryKey: ["ai-status"],
-    queryFn: () => api<{ enabled: boolean; provider: string; model: string }>("/api/v2/ai/status"),
+    queryFn: () => api<AiStatus>("/api/v2/ai/status"),
   });
   const refresh = useMutation({
     mutationFn: () =>
@@ -1286,13 +1293,15 @@ function OneKeyListingTools({ listing }: { listing: Listing }) {
       <div className="notice">
         <strong>AI marketing proposal</strong>
         <span>
-          {aiStatus.data?.enabled
-            ? `${aiStatus.data.provider} · ${aiStatus.data.model}. Generation never applies automatically.`
-            : "AI is disabled; deterministic manual editing remains available."}
+          {aiStatus.data?.productionReady
+            ? `${aiStatus.data.provider} · ${aiStatus.data.model}. Review and apply selected fields before sending.`
+            : aiStatus.data?.mode === "test"
+              ? "Deterministic test copy only—not a real AI rewrite. Configure a production AI provider before sending."
+              : "AI is disabled; deterministic manual editing remains available."}
         </span>
         <button
           className="text-button"
-          disabled={!aiStatus.data?.enabled || generate.isPending}
+          disabled={!aiStatus.data?.productionReady || generate.isPending}
           onClick={() => generate.mutate()}
         >
           Generate proposal
@@ -3187,7 +3196,7 @@ function CampaignAiAssistant({
   const [fields, setFields] = useState(["subject", "preheader", "introText", "ctaLabel"]);
   const status = useQuery({
     queryKey: ["ai-status"],
-    queryFn: () => api<{ enabled: boolean; provider: string; model: string }>("/api/v2/ai/status"),
+    queryFn: () => api<AiStatus>("/api/v2/ai/status"),
   });
   const generate = useMutation({
     mutationFn: () =>
@@ -3221,11 +3230,15 @@ function CampaignAiAssistant({
       <div className="toolbar">
         <span>
           AI copy assistant ·{" "}
-          {status.data?.enabled ? `${status.data.provider} (${status.data.model})` : "disabled"}
+          {status.data?.productionReady
+            ? `${status.data.provider} (${status.data.model})`
+            : status.data?.mode === "test"
+              ? "test copy only—not real AI"
+              : "disabled"}
         </span>
         <button
           className="text-button"
-          disabled={!status.data?.enabled || generate.isPending}
+          disabled={!status.data?.productionReady || generate.isPending}
           onClick={() => generate.mutate()}
         >
           Generate 3 variants
@@ -4206,7 +4219,7 @@ function IntegrationOperations() {
   });
   const ai = useQuery({
     queryKey: ["ai-status"],
-    queryFn: () => api<{ enabled: boolean; provider: string; model: string }>("/api/v2/ai/status"),
+    queryFn: () => api<AiStatus>("/api/v2/ai/status"),
   });
   const webhooks = useQuery({
     queryKey: ["webhook-operations"],
@@ -4295,9 +4308,11 @@ function IntegrationOperations() {
       <div className="notice">
         <strong>AI · {ai.data?.provider ?? "loading"}</strong>
         <span>
-          {ai.data?.enabled
-            ? `${ai.data.model} enabled`
-            : "Disabled; deterministic editing remains active"}
+          {ai.data?.productionReady
+            ? `${ai.data.model} production model enabled`
+            : ai.data?.mode === "test"
+              ? `${ai.data.model} is test-only and cannot be used for production copy`
+              : "Disabled; deterministic editing remains active"}
         </span>
       </div>
       <h3>Webhook reconciliation</h3>

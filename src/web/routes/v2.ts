@@ -133,10 +133,13 @@ const oneKeyRecipientSchema = z.object({
 const aiToneSchema = z.enum(["professional", "warm", "concise", "luxury"]);
 
 router.get("/ai/status", (_req, res) => {
+  const testOnly = config.aiProvider === "fake";
   res.json({
     enabled: config.aiProvider !== "disabled",
     provider: config.aiProvider,
-    model: config.openAiModel,
+    model: testOnly ? "fake-deterministic-v1" : config.openAiModel,
+    productionReady: ["openai", "azure-openai"].includes(config.aiProvider),
+    mode: config.aiProvider === "disabled" ? "disabled" : testOnly ? "test" : "production",
   });
 });
 router.post(
