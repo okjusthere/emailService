@@ -19,8 +19,16 @@ chmod 600 "${secret_document}"
 cleanup() { rm -f "${secret_document}"; }
 trap cleanup EXIT
 
-read -r -s -p "Enter ${secret_name}: " secret_value
+IFS= read -r -s -p "Enter ${secret_name}: " secret_value
 echo
+if [[ -z "${secret_value}" ]]; then
+  echo "Secret value cannot be empty." >&2
+  exit 2
+fi
+if [[ "${secret_name}" == "resend-api-key" && ! "${secret_value}" =~ ^re_[A-Za-z0-9_]+$ ]]; then
+  echo "Invalid Resend API key. Paste the raw re_... value without spaces, backslashes, or terminal editing keys." >&2
+  exit 2
+fi
 jq -n --arg value "${secret_value}" '{properties:{value:$value}}' > "${secret_document}"
 unset secret_value
 
