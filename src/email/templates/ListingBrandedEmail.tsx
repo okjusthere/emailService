@@ -26,12 +26,14 @@ export function ListingBrandedEmail({
           {company.name}
         </Text>
       </Section>
-      <Img
-        src={listing.heroUrl}
-        alt={listing.heroAlt}
-        width="600"
-        style={{ display: "block", width: "100%", height: "auto" }}
-      />
+      <Link href={content.ctaUrl} style={{ display: "block" }}>
+        <Img
+          src={listing.heroUrl}
+          alt={listing.heroAlt}
+          width="600"
+          style={{ display: "block", width: "100%", height: "auto" }}
+        />
+      </Link>
       <Section style={{ padding: "32px" }}>
         <Text
           style={{
@@ -44,9 +46,11 @@ export function ListingBrandedEmail({
         >
           NEW LISTING
         </Text>
-        <Heading as="h1" style={{ margin: "0 0 8px", fontSize: "30px", lineHeight: "36px" }}>
-          {listing.title}
-        </Heading>
+        <Link href={content.ctaUrl} style={{ color: "#111", textDecoration: "none" }}>
+          <Heading as="h1" style={{ margin: "0 0 8px", fontSize: "30px", lineHeight: "36px" }}>
+            {listing.title}
+          </Heading>
+        </Link>
         <Text style={{ margin: "0 0 8px", color: "#55615b", fontSize: "16px" }}>
           {listing.address}, {listing.city}, {listing.stateCode} {listing.postalCode}
         </Text>

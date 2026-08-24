@@ -156,6 +156,7 @@ var commonEnv = concat([
   { name: 'COMPANY_NAME', value: 'Homix Realty' }
   { name: 'COMPANY_POSTAL_ADDRESS', value: companyPostalAddress }
   { name: 'COMPANY_WEBSITE', value: 'https://homixny.com' }
+  { name: 'COMPANY_LISTINGS_URL', value: 'https://www.homixny.com/listings' }
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
   { name: 'WORKER_POLL_INTERVAL_MS', value: '2000' }
   { name: 'JOB_LOCK_SECONDS', value: '120' }

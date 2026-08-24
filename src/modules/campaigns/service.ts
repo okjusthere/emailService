@@ -115,7 +115,7 @@ function snapshotFromCampaign(
       introHtml: sanitizeIntro(campaign.introHtml ?? ""),
       introText: campaign.introText ?? undefined,
       ctaLabel: campaign.ctaLabel,
-      ctaUrl: campaign.ctaUrl ?? campaign.listing.listingUrl ?? "",
+      ctaUrl: campaign.ctaUrl ?? campaign.listing.listingUrl ?? config.companyListingsUrl,
     },
     templateVersion:
       campaign.templateKey === "LISTING_BRANDED" ? "listing-branded@2" : "broker-personal@2",

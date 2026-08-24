@@ -24,21 +24,25 @@ export function BrokerPersonalEmail({
         ) : (
           <Text>I wanted to share a property that may be relevant to you.</Text>
         )}
-        <Img
-          src={listing.heroUrl}
-          alt={listing.heroAlt}
-          width="524"
-          style={{
-            display: "block",
-            width: "100%",
-            height: "auto",
-            margin: "24px 0 18px",
-            borderRadius: "5px",
-          }}
-        />
-        <Text style={{ margin: "0 0 4px", fontSize: "22px", fontWeight: 700 }}>
-          {listing.title}
-        </Text>
+        <Link href={content.ctaUrl} style={{ display: "block" }}>
+          <Img
+            src={listing.heroUrl}
+            alt={listing.heroAlt}
+            width="524"
+            style={{
+              display: "block",
+              width: "100%",
+              height: "auto",
+              margin: "24px 0 18px",
+              borderRadius: "5px",
+            }}
+          />
+        </Link>
+        <Link href={content.ctaUrl} style={{ color: "#111", textDecoration: "none" }}>
+          <Text style={{ margin: "0 0 4px", fontSize: "22px", fontWeight: 700 }}>
+            {listing.title}
+          </Text>
+        </Link>
         <Text style={{ margin: "0 0 4px", color: "#5b625e" }}>
           {listing.address}, {listing.city}, {listing.stateCode} {listing.postalCode}
         </Text>

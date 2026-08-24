@@ -795,6 +795,19 @@ describe("PostgreSQL delivery invariants", () => {
     }
   });
 
+  it("uses the Homix listings page when campaign and listing CTA URLs are missing", async () => {
+    const fixture = await createRenderableCampaign();
+    await prisma.$transaction([
+      prisma.listing.update({ where: { id: fixture.listing.id }, data: { listingUrl: null } }),
+      prisma.campaign.update({ where: { id: fixture.campaign.id }, data: { ctaUrl: null } }),
+    ]);
+
+    const preview = await previewCampaign(fixture.campaign.id);
+
+    expect(preview.html).toContain(`href="${config.companyListingsUrl}"`);
+    expect(config.companyListingsUrl).toBe("https://www.homixny.com/listings");
+  });
+
   it("pauses and resumes a sending campaign with one durable resume job", async () => {
     const fixture = await createFixture(1, "SENDING");
     const paused = await transitionCampaign(fixture.campaign.id, "pause", testActor());
