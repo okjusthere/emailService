@@ -75,7 +75,18 @@ Provider outage degrades only the integration; it does not make the application 
 
 ## AI operations
 
-Create a dedicated Homix Marketing OpenAI project/key and store it as `openai-api-key`. While delivery remains disabled, set `AI_PROVIDER=openai`, enable the Key Vault reference and test at least two imported listings. Review facts versus proposal, apply only selected fields, and simulate provider failure to confirm manual editing/sending still works. Rotate by publishing a new Key Vault version, deploying/testing generation, then revoking the old key. AI errors must never trigger delivery retries or block a manual Campaign.
+Use either a dedicated Homix Marketing OpenAI project or an approved Azure OpenAI deployment and store its key as `openai-api-key`. For Azure, set `AI_PROVIDER=azure-openai`, `OPENAI_BASE_URL=https://RESOURCE.openai.azure.com/openai/v1`, and `OPENAI_MODEL` to the deployment name. The server uses the Azure `api-key` header and rejects non-`*.openai.azure.com/openai/v1` endpoints before a key can be sent.
+
+While delivery remains disabled or sandboxed, test at least two imported listings. The UI must report a production provider/model; `fake-deterministic-v1` is test-only and its Generate buttons are disabled. Review source facts versus proposal, apply only selected fields, then generate/apply a Campaign proposal. Confirm the preview contains the complete description and listing Agent name/company/email. Simulate provider failure to confirm manual editing/sending still works. Rotate by publishing a new Key Vault version, deploying/testing generation, then revoking the old key. AI errors must never trigger delivery retries or block a manual Campaign.
+
+## Public beta send sequence
+
+1. Keep `sandbox`, global pause and recovery guard in place while creating the Resend webhook and refreshing the Key Vault reference.
+2. Verify `/api/v2/ai/status` reports `mode=production`, generate/apply listing and Campaign proposals, activate the reviewed listing, import the BBO recipient audience and inspect the eligible estimate.
+3. Preview and send a new allowlisted canary. Confirm complete content, listing Agent signature/Reply-To, visible unsubscribe, provider delivered event and signed webhook processing.
+4. Mark the current Campaign ready. Clear the recovery guard and global pause through the audited Admin resume endpoint with a real reason.
+5. Deploy `EMAIL_DELIVERY_MODE=live`. Start with the sender's configured daily quota and a small scheduled batch; do not bypass permission, suppression, test-send or quota gates.
+6. Watch delivered, hard bounce and complaint events. Pause immediately on an unexpected audience, identity, content, webhook or deliverability result.
 
 ## Complaint or bounce spike
 

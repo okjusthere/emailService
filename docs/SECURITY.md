@@ -15,7 +15,7 @@ Rich email content and agent signatures pass an allowlist sanitizer. Preview use
 
 ## Email safety
 
-- Stable From profiles and explicit Reply-To agents; no random domain/address rotation.
+- Stable From profiles; listing Campaign Reply-To and signature are always derived from the listing's assigned Agent and cannot be overridden by Campaign input or sender fallback. No random domain/address rotation.
 - `disabled` makes no external call; `sandbox` enforces the allowlist both for test send and campaign recipient processing.
 - Live requires verified sender and readiness confirmations. Suppression is global and rechecked immediately before submit.
 - Batch attempts are recorded before provider calls. Stable, non-PII HMAC-derived idempotency keys prevent unsafe duplicate retry; uncertain outcomes stop for manual reconciliation.
@@ -28,7 +28,7 @@ Rich email content and agent signatures pass an allowlist sanitizer. Preview use
 
 OneKey data enters through a server-only provider adapter. The browser never receives the BBO bearer key or MLS Grid token. BBO keys should be dedicated to Homix Marketing and scoped to the read-only listing, event and marketing-recipient routes. Provider errors are sanitized, searches/limits are bounded, and remote media is copied only from the configured provider origin, size-checked, decoded by Sharp and stored under Homix control.
 
-AI receives only an allowlist of listing facts and current marketing fields—never contacts, recipient lists, auth headers or secrets. MLS remarks are explicitly treated as untrusted data, not instructions. The OpenAI adapter uses server-side structured output; persisted proposals do not overwrite content until a human selects fields and applies them. Generated intro text is HTML-escaped before sanitization. `AI_PROVIDER=disabled` leaves the manual campaign/send path intact.
+AI receives only an allowlist of listing facts and current marketing fields—never contacts, recipient lists, auth headers or secrets. MLS remarks are explicitly treated as untrusted data, not instructions. The OpenAI/Azure OpenAI adapter uses server-side structured output; Azure key egress is restricted to an HTTPS `*.openai.azure.com/openai/v1` endpoint. Persisted proposals do not overwrite content until a human selects fields and applies them. Generated intro text is HTML-escaped before sanitization. `AI_PROVIDER=disabled` leaves the manual campaign/send path intact, while the deterministic fake provider is clearly marked test-only.
 
 ## Data exposure and retention
 
