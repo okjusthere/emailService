@@ -412,6 +412,7 @@ test("completes the simplified listing email composer on desktop and mobile", as
   await page.getByLabel("MLS number or address").fill("90000001");
   await page.getByRole("button", { name: "Find property" }).click();
   await expect(page.getByRole("button", { name: /Use this property/ })).toBeVisible();
+  await page.getByLabel(/Homix agent for/).selectOption({ index: 1 });
   await page.screenshot({ path: "artifacts/screenshots/home-search-results.png", fullPage: true });
   await page.getByRole("button", { name: /Use this property/ }).click();
   await expect(page.getByRole("heading", { name: "Create listing email" })).toBeVisible();
@@ -484,6 +485,7 @@ test("keeps the fallback draft, restores autosave, and schedules a saved list", 
   await page.getByRole("button", { name: "Continue" }).click();
   await page.getByLabel("MLS number or address").fill("90000001");
   await page.getByRole("button", { name: "Find property" }).click();
+  await page.getByLabel(/Homix agent for/).selectOption({ index: 1 });
   await page.getByRole("button", { name: /Use this property/ }).click();
   await expect(page.getByRole("heading", { name: "Create listing email" })).toBeVisible();
   await expect(page.getByLabel("Subject")).toHaveValue(/New listing:/i);

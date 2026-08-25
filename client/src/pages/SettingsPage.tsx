@@ -1,11 +1,11 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, ServerCog, ShieldCheck } from "lucide-react";
 import type { ListResponse, User } from "../app/types.js";
 import { EmptyBlock, ErrorBlock, LoadingBlock } from "../components/ui/Feedback.js";
 import { Page } from "../components/ui/Page.js";
 import { StatusBadge } from "../components/ui/StatusBadge.js";
 import { api, formatEt } from "../lib/api.js";
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 
 type Sender = {
   id: string;
@@ -16,7 +16,14 @@ type Sender = {
   isActive: boolean;
   dailyLimit: number;
 };
-type Agent = { id: string; displayName: string; email: string; isActive: boolean };
+type Agent = {
+  id: string;
+  displayName: string;
+  email: string;
+  phone?: string | null;
+  title?: string | null;
+  isActive: boolean;
+};
 type Readiness = {
   database: string;
   migration: string | null;
@@ -30,6 +37,7 @@ type Readiness = {
 };
 
 export function SettingsPage({ user }: { user: User }) {
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<"general" | "sending" | "integrations" | "operations">(
     window.location.pathname.endsWith("/operations") && user.role === "ADMIN"
       ? "operations"
@@ -89,6 +97,36 @@ export function SettingsPage({ user }: { user: User }) {
       }),
     onSuccess: () => void readiness.refetch(),
   });
+  const createAgent = useMutation({
+    mutationFn: (form: HTMLFormElement) => {
+      const values = new FormData(form);
+      const firstName = String(values.get("firstName") ?? "").trim();
+      const lastName = String(values.get("lastName") ?? "").trim();
+      return api<Agent>("/api/v2/agents", {
+        method: "POST",
+        body: JSON.stringify({
+          firstName,
+          lastName,
+          displayName: `${firstName} ${lastName}`.trim(),
+          email: String(values.get("email") ?? "").trim(),
+          phone: String(values.get("phone") ?? "").trim() || null,
+          title: String(values.get("title") ?? "").trim() || null,
+          licenseNumber: String(values.get("licenseNumber") ?? "").trim() || null,
+          headshotUrl: null,
+          signatureHtml: null,
+        }),
+      });
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["settings-agents"] }),
+  });
+
+  function submitAgent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    createAgent.mutate(form, {
+      onSuccess: () => form.reset(),
+    });
+  }
   return (
     <Page title="Settings" description="Sending identity, reply-to agents, and operational health.">
       <div className="segmented" role="tablist" aria-label="Settings sections">
@@ -160,6 +198,41 @@ export function SettingsPage({ user }: { user: User }) {
                 Add an agent before importing a listing.
               </EmptyBlock>
             )}
+            {user.role === "ADMIN" ? (
+              <details className="settings-add-agent">
+                <summary>Add listing agent</summary>
+                <form onSubmit={submitAgent}>
+                  <label>
+                    First name
+                    <input name="firstName" required />
+                  </label>
+                  <label>
+                    Last name
+                    <input name="lastName" required />
+                  </label>
+                  <label>
+                    Email
+                    <input name="email" type="email" required />
+                  </label>
+                  <label>
+                    Phone
+                    <input name="phone" type="tel" />
+                  </label>
+                  <label>
+                    Title
+                    <input name="title" placeholder="Licensed Real Estate Salesperson" />
+                  </label>
+                  <label>
+                    License number
+                    <input name="licenseNumber" />
+                  </label>
+                  <button className="button primary" disabled={createAgent.isPending}>
+                    {createAgent.isPending ? "Adding…" : "Add agent"}
+                  </button>
+                  {createAgent.error ? <ErrorBlock error={createAgent.error} /> : null}
+                </form>
+              </details>
+            ) : null}
           </article>
         </section>
       ) : null}

@@ -534,7 +534,7 @@ summary:focus-visible {
 }
 .property-result {
   display: grid;
-  grid-template-rows: 145px auto auto;
+  grid-template-rows: 145px auto auto auto;
   gap: 13px;
   padding: 11px;
   background: #fff;
@@ -574,6 +574,21 @@ summary:focus-visible {
 }
 .property-result .button {
   width: 100%;
+}
+.property-agent-select {
+  display: grid;
+  gap: 5px;
+  color: var(--hm-green-950);
+  font-size: 12px;
+  font-weight: 700;
+}
+.property-agent-select select {
+  width: 100%;
+}
+.property-agent-select small {
+  color: var(--hm-muted);
+  font-weight: 400;
+  line-height: 1.4;
 }
 .home-recent .campaign-list {
   padding: 12px 20px;
@@ -797,6 +812,26 @@ summary:focus-visible {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+.settings-add-agent {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hm-line);
+}
+.settings-add-agent summary {
+  cursor: pointer;
+  color: var(--hm-green-800);
+  font-weight: 800;
+}
+.settings-add-agent form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+.settings-add-agent form .button,
+.settings-add-agent form .feedback-block {
+  grid-column: 1 / -1;
 }
 .operations-section {
   margin-top: 34px;

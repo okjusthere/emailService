@@ -40,12 +40,12 @@ OneKey 与 AI 同样默认禁用，不需要外部凭据即可启动。开发验
 
 ## Quick Start: Send a Listing Email
 
-1. 在 Home 输入 MLS 号或地址并选择房源；系统自动导入或复用房源，并创建/复用最近 24 小时的草稿。
+1. 在 Home 输入 MLS 号或地址并选择房源；在 **Email signature & replies** 确认 Homix Agent。只有 OneKey 挂牌姓名与本地 Agent 完全一致时系统才会预选，不会回退到第一个 Agent。缺少 Agent 时先在 Settings 添加姓名、真实邮箱、电话和执照信息。系统随后导入或复用房源，并创建/复用最近 24 小时的草稿。
 2. 默认选择 **Nearby active agents**；也可直接选择 Saved contact list 或安全 Custom segment。附近经纪人默认使用同邮编加最近 3 个邮编、过去 12 个月成交，并排除抑制、近期已发和同房源已联系地址。
 3. AI 生产配置可用时会自动写一次初稿并提供三个主题方案与改写风格；否则保留安全的人工起始文案。Subject、preview text、正文、CTA 都可直接编辑并自动保存。
 4. 在右侧 Desktop/Mobile 预览确认完整房源和 Listing Agent 落款，然后点击 **Send test to me** 测试当前版本。
 5. 测试成功后点击 **Review & send**，选择立即或定时发送并确认。服务端原子验证版本并创建不可变内容/收件人快照。
-6. 在 Campaigns 查看 In progress、Preparing、Scheduled、Sending、Paused 或 Sent，并在 Reports 查看汇总。旧 `/listings`、`/audiences`、`/analytics` 链接会重定向到新页面。
+6. 在 Campaigns 查看 In progress、Preparing、Scheduled、Sending、Paused 或 Sent，并在 Reports 查看汇总。已有房源的落款人可在 Property Library 的 **Signature & replies** 改绑；所有 DRAFT Campaign 会同步并要求重新测试，已冻结或已发送快照保持不变。旧 `/listings`、`/audiences`、`/analytics` 链接会重定向到新页面。
 
 普通 Marketer 页面不需要理解 provider、model、audience filter、snapshot 或 worker；这些仍保留在服务端和管理员 Operations 中。旧 V2 API 继续兼容，自动保存使用 `If-Match`，测试和发布都要求当前版本。
 

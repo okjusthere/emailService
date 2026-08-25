@@ -39,12 +39,14 @@ describe("OneKey provider boundary", () => {
         city: "Flushing",
         stateOrProvince: "New York",
         postalCode: "11354",
+        listAgentFullName: "Si Zhang",
         listPrice: 1_250_000,
         imageUrls: ["https://onekey.example.test/media/1.jpg"],
       })
     ).toMatchObject({
       sourceKey: "KEY900000001",
       stateCode: "NY",
+      listAgentFullName: "Si Zhang",
       listPrice: 1_250_000,
       imageUrls: ["https://onekey.example.test/media/1.jpg"],
     });

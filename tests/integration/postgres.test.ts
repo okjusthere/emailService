@@ -37,7 +37,10 @@ import {
   validateContactImport,
 } from "../../src/modules/imports/service.js";
 import { upsertSuppression } from "../../src/modules/suppressions/domain.js";
-import { configureCampaignOneKeyRecipients } from "../../src/modules/onekey/service.js";
+import {
+  configureCampaignOneKeyRecipients,
+  importOneKeyListing,
+} from "../../src/modules/onekey/service.js";
 import { getPrivateObjectStorage } from "../../src/storage/PrivateObjectStorage.js";
 import { completeClaimedJob, failClaimedJob } from "../../src/worker/jobRunner.js";
 import { seedDatabase } from "../../prisma/seedData.js";
@@ -369,6 +372,70 @@ describe("PostgreSQL delivery invariants", () => {
       isDefault: true,
     });
     expect(await prisma.senderProfile.count()).toBe(1);
+  });
+
+  it("reconciles an imported listing and its draft to the explicitly selected agent", async () => {
+    const marker = randomUUID();
+    const wrongAgent = await prisma.agent.create({
+      data: {
+        firstName: "Wrong",
+        lastName: "Default",
+        displayName: `Wrong Default ${marker}`,
+        email: `wrong-${marker}@example.com`,
+        emailNormalized: `wrong-${marker}@example.com`,
+      },
+    });
+    const first = await importOneKeyListing("KEY900000001", wrongAgent.id, testActor());
+    const sender = await prisma.senderProfile.findFirstOrThrow({
+      where: { isActive: true, verificationStatus: "VERIFIED" },
+    });
+    const campaign = await prisma.campaign.create({
+      data: {
+        name: `Wrong agent draft ${marker}`,
+        listingId: first.listing.id,
+        senderProfileId: sender.id,
+        replyToAgentId: wrongAgent.id,
+        templateKey: "LISTING_BRANDED",
+        subject: "Wrong agent regression",
+        audienceFilter: {},
+        lastSuccessfulTestAt: new Date(),
+        lastTestedVersion: 1,
+        createdByUserId: actorId,
+        updatedByUserId: actorId,
+      },
+    });
+
+    const correctAgent = await prisma.agent.create({
+      data: {
+        firstName: "Fixture",
+        lastName: "Agent",
+        displayName: "Fixture Agent",
+        email: `fixture-${marker}@homixny.com`,
+        emailNormalized: `fixture-${marker}@homixny.com`,
+        phone: "718-555-0100",
+        licenseNumber: "10401300000",
+      },
+    });
+    const reconciled = await importOneKeyListing("KEY900000001", correctAgent.id, testActor());
+    const listing = await prisma.listing.findUniqueOrThrow({
+      where: { id: reconciled.listing.id },
+      include: { agent: true },
+    });
+    const draft = await prisma.campaign.findUniqueOrThrow({ where: { id: campaign.id } });
+
+    expect(reconciled.created).toBe(false);
+    expect(listing.agent).toMatchObject({
+      displayName: "Fixture Agent",
+      email: `fixture-${marker}@homixny.com`,
+      phone: "718-555-0100",
+      licenseNumber: "10401300000",
+    });
+    expect(draft).toMatchObject({
+      replyToAgentId: listing.agent.id,
+      version: 2,
+      lastSuccessfulTestAt: null,
+      lastTestedVersion: null,
+    });
   });
 
   it("marks a malformed import failed and retries processed rows idempotently", async () => {

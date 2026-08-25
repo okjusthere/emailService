@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "../../src/db/prisma.js";
 import { updateCampaign } from "../../src/modules/campaigns/service.js";
+import { updateListing } from "../../src/modules/listings/service.js";
 
 describe("listing campaign agent identity updates", () => {
   let userId: string;
@@ -44,15 +45,7 @@ describe("listing campaign agent identity updates", () => {
         })
       )
     );
-    const sender = await prisma.senderProfile.create({
-      data: {
-        name: `Agent regression ${marker}`,
-        fromName: "Homix Listings",
-        fromEmail: `sender-${marker}@example.com`,
-        fromEmailNormalized: `sender-${marker}@example.com`,
-        domain: "example.com",
-      },
-    });
+    const sender = await prisma.senderProfile.findFirstOrThrow({ where: { isDefault: true } });
     const listingData = (label: string, agentId: string) => ({
       internalName: `${label} ${marker}`,
       title: `${label} listing`,
@@ -63,6 +56,8 @@ describe("listing campaign agent identity updates", () => {
       city: "Flushing",
       stateCode: "NY",
       postalCode: "11354",
+      askingPrice: "1",
+      priceUponRequest: true,
       agentId,
       createdByUserId: userId,
       updatedByUserId: userId,
@@ -107,8 +102,18 @@ describe("listing campaign agent identity updates", () => {
       replyToAgentId: secondAgent!.id,
     });
 
+    await updateListing(secondListing.id, { agentId: firstAgent!.id }, actor);
     await expect(
-      updateCampaign(campaign.id, { listingId: randomUUID() }, moved.version, actor)
+      prisma.campaign.findUniqueOrThrow({ where: { id: campaign.id } })
+    ).resolves.toMatchObject({
+      replyToAgentId: firstAgent!.id,
+      version: moved.version + 1,
+      lastSuccessfulTestAt: null,
+      lastTestedVersion: null,
+    });
+
+    await expect(
+      updateCampaign(campaign.id, { listingId: randomUUID() }, moved.version + 1, actor)
     ).rejects.toMatchObject({ code: "LISTING_NOT_FOUND", status: 404 });
 
     const legacy = await prisma.campaign.create({
