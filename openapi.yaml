@@ -841,11 +841,12 @@ paths:
       {
         tags: [Campaigns],
         operationId: testSendCampaign,
-        summary: Send the current version only to an allowlisted address,
+        summary: Send the current version only to the authenticated user's allowlisted address,
         requestBody: { $ref: "#/components/requestBodies/JsonBody" },
         responses:
           {
             "200": { $ref: "#/components/responses/Success" },
+            "403": { $ref: "#/components/responses/Error" },
             "409": { $ref: "#/components/responses/Error" },
           },
       }

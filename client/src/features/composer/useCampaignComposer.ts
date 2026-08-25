@@ -21,6 +21,13 @@ type RecipientCriteria = {
   excludeEmailedWithinDays: number;
 };
 
+const defaultOneKeyRecipientCriteria: RecipientCriteria = {
+  nearbyZipCount: 3,
+  closedMonths: 12,
+  limit: 2000,
+  excludeEmailedWithinDays: 14,
+};
+
 export type SavedAudience = {
   id: string;
   name: string;
@@ -73,6 +80,7 @@ export function useCampaignComposer(id: string, userEmail: string) {
   } | null>(null);
   const revision = useRef(0);
   const aiStarted = useRef(false);
+  const automaticRecipientsStarted = useRef(false);
   const estimatedAudience = useRef<string | null>(null);
 
   useEffect(() => {
@@ -231,6 +239,29 @@ export function useCampaignComposer(id: string, userEmail: string) {
     },
   });
 
+  useEffect(() => {
+    const current = campaign.data;
+    if (
+      !current ||
+      current.status !== "DRAFT" ||
+      current.listing?.source !== "ONEKEY" ||
+      current.savedAudience ||
+      recipientSummary ||
+      dirty ||
+      save.isPending ||
+      recipients.isPending ||
+      automaticRecipientsStarted.current
+    )
+      return;
+    automaticRecipientsStarted.current = true;
+    track("recipients_auto_started", id);
+    recipients.mutate(defaultOneKeyRecipientCriteria, {
+      onSuccess: (result) =>
+        track("recipients_auto_completed", id, { eligible: result.summary.eligible }),
+      onError: () => track("recipients_auto_failed", id),
+    });
+  }, [campaign.data, dirty, id, recipientSummary, recipients.isPending, save.isPending]);
+
   const selectAudience = useMutation({
     mutationFn: async ({
       savedAudienceId,
@@ -364,8 +395,11 @@ export function useCampaignComposer(id: string, userEmail: string) {
   });
 
   useEffect(() => {
+    const waitingForAutomaticRecipients =
+      campaign.data?.listing?.source === "ONEKEY" && !recipientSummary;
     if (
       !campaign.data ||
+      waitingForAutomaticRecipients ||
       !aiStatus.data?.productionReady ||
       dirty ||
       save.isPending ||
@@ -377,7 +411,14 @@ export function useCampaignComposer(id: string, userEmail: string) {
     if (sessionStorage.getItem(`homix-ai-draft:${id}`)) return;
     aiStarted.current = true;
     generateAi.mutate("professional");
-  }, [aiStatus.data?.productionReady, campaign.data?.id, dirty, save.isPending]);
+  }, [
+    aiStatus.data?.productionReady,
+    campaign.data?.id,
+    campaign.data?.listing?.source,
+    dirty,
+    recipientSummary,
+    save.isPending,
+  ]);
 
   const testSend = useMutation({
     mutationFn: () => {

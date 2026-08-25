@@ -65,7 +65,22 @@ export type Campaign = {
   failedCount?: number;
   updatedAt: string;
   listing?: Listing | null;
-  senderProfile?: { id: string; name: string; fromEmail: string; fromName?: string };
+  senderProfile?: {
+    id: string;
+    name: string;
+    fromEmail: string;
+    fromName?: string;
+    dailyLimit: number;
+    batchSize: number;
+    minBatchIntervalSeconds: number;
+    timezone: string;
+    sendWindowStart: string;
+    sendWindowEnd: string;
+    allowedWeekdays: number[];
+    warmupEnabled: boolean;
+    warmupStartDate?: string | null;
+    warmupSchedule?: Array<{ day: number; limit: number }> | null;
+  };
   replyToAgent?: { displayName: string; email: string; phone?: string | null } | null;
   savedAudience?: { id: string; name: string; lastEstimatedCount?: number | null } | null;
 };

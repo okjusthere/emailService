@@ -105,6 +105,7 @@ export function CampaignComposerPage({ user }: { user: User }) {
           <RecipientPanel
             summary={composer.recipientSummary}
             pending={composer.recipients.isPending}
+            automatic={campaign.listing?.source === "ONEKEY"}
             disabled={composer.dirty || composer.save.isPending}
             error={composer.recipients.error ?? composer.selectAudience.error}
             onGenerate={(criteria) => composer.recipients.mutate(criteria)}
@@ -237,8 +238,12 @@ export function CampaignComposerPage({ user }: { user: User }) {
               disabled={!canTest || composer.testSend.isPending}
               onClick={() => composer.testSend.mutate()}
             >
-              {composer.testSend.isPending ? "Sending test…" : "Send test to me"}
+              {composer.testSend.isPending ? "Sending test…" : `Send test to ${user.email}`}
             </button>
+            <small className="test-recipient-note">
+              Only you receive this test. Signature and replies use{" "}
+              {campaign.replyToAgent?.displayName ?? "the listing agent"}.
+            </small>
             {composer.testSend.error ? (
               <p className="form-error">{composer.testSend.error.message}</p>
             ) : null}
@@ -250,7 +255,7 @@ export function CampaignComposerPage({ user }: { user: User }) {
               <Send size={17} /> Review & send
             </button>
             {!eligible ? (
-              <small>Suggest recipients to continue.</small>
+              <small>Recipients are required before sending.</small>
             ) : !tested ? (
               <small>A successful test unlocks sending.</small>
             ) : null}

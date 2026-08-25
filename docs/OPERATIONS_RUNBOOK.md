@@ -24,6 +24,12 @@ az containerapp update -g REQUIRED_RESOURCE_GROUP -n ca-homix-mkt-prod-worker --
 
 The `RECOVERY_GUARD` is checked independently of `GLOBAL_SEND_PAUSED`, so directly editing only the pause flag cannot bypass restore safety.
 
+## Gradual delivery policy
+
+The Homix Listings sender is intentionally configured for sparse delivery, not provider throughput: one recipient per batch, at least 300 seconds between provider submissions, weekdays 09:30–16:30 in `America/New_York`, and no more than 80 accepted recipients per local day. Warm-up begins at 30/day, remains 30 on day 2, increases to 50/day on days 3–4, and reaches 80/day on day 5. The Composer confirmation estimates completion from these persisted sender fields.
+
+`sender_profiles.next_batch_at` is claimed in a serializable transaction before both initial batches and safe retries. It is shared across every Campaign using that sender, so adding Campaigns or workers does not multiply the send rate. Do not clear it to speed delivery. To change pacing, pause sending first, review active/queued batches and deliverability, update the sender policy through the authenticated API/UI, and resume with an audit reason. Daily quota, send window, global pause, recovery guard, suppression and deliverability thresholds remain independent gates.
+
 ## Worker stalled
 
 ```bash
@@ -69,7 +75,7 @@ Keep `EMAIL_DELIVERY_MODE=disabled` while enabling `ONEKEY_PROVIDER=bbo`. Instal
 3. Search the fixture/approved listing by MLS number and address.
 4. Import the listing and confirm **Signature & replies** shows the current OneKey listing Agent. Import automatically reads the listing-scoped Agent contact from BBO and upserts it by stable `memberKey`; it must never fall back to the first local Agent. A missing/inactive roster Agent or invalid email must stop the flow with an explicit error. Manual Agent creation is only a fallback for manually created properties or an approved override.
 5. Refresh and confirm user marketing overrides remain unchanged.
-6. Preview recipient candidates before explicit import. Confirm the policy is last 12–24 months Closed, listing and buyer sides deduplicated, active agents with valid email, Homix office excluded, same ZIP plus 0–5 nearest configured ZIPs.
+6. Open the OneKey Composer and confirm the default **Nearby active agents** choice automatically progresses from “Finding recipients from BBO…” to the eligible/held-back summary without an extra import click. Use **Adjust** only when an operator intentionally changes the 12–24 month or 0–5 nearby-ZIP criteria. Confirm listing and buyer sides are deduplicated, only active agents with valid email remain, and the Homix office is excluded.
 
 Provider outage degrades only the integration; it does not make the application unready. Leave sync disabled if the BBO key/scope or licensed data path is not confirmed. Rotate the BBO key by installing a new Key Vault version, deploying/testing, then revoking the old key.
 
@@ -82,10 +88,10 @@ While delivery remains disabled or sandboxed, test at least two imported listing
 ## Public beta send sequence
 
 1. Keep `sandbox`, global pause and recovery guard in place while creating the Resend webhook and refreshing the Key Vault reference.
-2. Verify `/api/v2/ai/status` reports `mode=production`, generate/apply listing and Campaign proposals, activate the reviewed listing, import the BBO recipient audience and inspect the eligible estimate.
+2. Verify `/api/v2/ai/status` reports `mode=production`, generate/apply listing and Campaign proposals, activate the reviewed listing, let the Composer automatically import the BBO recipient audience, and inspect the eligible/held-back estimate.
 3. Preview and send a new allowlisted canary. Confirm complete content, listing Agent signature/Reply-To, visible unsubscribe, provider delivered event and signed webhook processing.
 4. Mark the current Campaign ready. Clear the recovery guard and global pause through the audited Admin resume endpoint with a real reason.
-5. Deploy `EMAIL_DELIVERY_MODE=live`. Start with the sender's configured daily quota and a small scheduled batch; do not bypass permission, suppression, test-send or quota gates.
+5. Deploy `EMAIL_DELIVERY_MODE=live`. Confirm the review dialog reports one email every five minutes, the daily warm-up ceiling and the estimated completion time before starting the small scheduled Campaign; do not bypass permission, suppression, test-send, sender-slot or quota gates.
 6. Watch delivered, hard bounce and complaint events. Pause immediately on an unexpected audience, identity, content, webhook or deliverability result.
 
 ## Complaint or bounce spike

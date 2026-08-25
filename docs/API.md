@@ -33,14 +33,14 @@ CSV import is an explicit four-step flow: upload and inspect headers/masked prev
 
 Campaign mutations that can be retried use explicit idempotency or optimistic concurrency: draft updates check version; send-now accepts a client idempotency key and reuses the durable dispatch job/snapshot instead of duplicating recipients.
 
-Test send requires a client-generated UUID `clientRequestId`. Its idempotency identity includes campaign/version, actor, normalized-recipient hash and that UUID. Retrying a failed HTTP request with the same UUID is safe; creating a new UUID intentionally sends another test.
+Test send requires a client-generated UUID `clientRequestId`. The requested email must equal the authenticated user's normalized email and must also be in `EMAIL_TEST_ALLOWLIST`; it cannot be used to send a preview to the listing Agent or another internal user. The authenticated user's display name supplies the test merge name, while the signature and Reply-To remain the listing Agent. Its idempotency identity includes campaign/version, actor, normalized-recipient hash and that UUID. Retrying a failed HTTP request with the same UUID is safe; creating a new UUID intentionally sends another test.
 
 ## Simplified composer orchestration
 
 The V3 browser flow uses three orchestration endpoints while retaining all V2 primitives:
 
 - `POST /campaigns/quick-start` requires `Idempotency-Key` and a `listingId`. It serializes double-clicks, reuses the current user's recent draft for that listing, or creates a draft with the verified default sender, listing Agent reply identity, safe fallback content and Homix listing CTA.
-- `POST /campaigns/{id}/recipients/onekey-nearby` requires the optimistic campaign `version`. It bulk imports compliant BBO candidates, creates an isolated campaign-specific saved group, applies permission/suppression/recent-contact/previous-listing exclusions, invalidates prior test evidence and returns a compact count summary.
+- `POST /campaigns/{id}/recipients/onekey-nearby` requires the optimistic campaign `version`. It bulk imports compliant BBO candidates, creates an isolated campaign-specific saved group, applies permission/suppression/recent-contact/previous-listing exclusions, invalidates prior test evidence and returns a compact count summary. The OneKey Composer invokes this automatically after quick-start; the endpoint remains available for retrying or adjusting the criteria.
 - `POST /campaigns/{id}/publish` requires `Idempotency-Key`, current `version`, and optional `scheduledAt`. Under a row lock it verifies a successful test for that version, live-send readiness, and the current state, then queues the existing immutable snapshot worker job. A replay with the same key is safe.
 
 `POST /product-events` accepts only enumerated low-cardinality UX events and per-event allowlisted, size-bounded scalar metadata. It writes to the existing audit trail and rejects content, recipient lists, provider details or secrets.

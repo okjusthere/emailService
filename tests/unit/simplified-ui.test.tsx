@@ -28,6 +28,7 @@ describe("simplified listing-email UI", () => {
       <RecipientPanel
         summary={null}
         pending={false}
+        automatic
         disabled={false}
         error={null}
         onGenerate={vi.fn()}
@@ -36,7 +37,8 @@ describe("simplified listing-email UI", () => {
       />
     );
     expect(property).toContain("136-20 Roosevelt Avenue");
-    expect(recipients).toContain("Suggest recipients");
+    expect(recipients).toContain("Preparing recipients");
+    expect(recipients).not.toContain("Suggest recipients");
     expect(recipients).toContain("Same ZIP plus 3 nearby ZIP codes");
     expect(recipients).toContain("Saved contact list");
     expect(recipients).toContain("Custom segment");
@@ -75,6 +77,7 @@ describe("simplified listing-email UI", () => {
       <RecipientPanel
         summary={null}
         pending={false}
+        automatic={false}
         disabled
         error={null}
         onGenerate={vi.fn()}

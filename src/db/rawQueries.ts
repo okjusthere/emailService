@@ -45,6 +45,48 @@ interface ClaimedRecipientRow {
   unsubscribe_token_hash: string;
 }
 
+export async function claimSenderDeliverySlot(input: {
+  senderProfileId: string;
+  minIntervalSeconds: number;
+  now?: Date;
+}): Promise<{ allowed: boolean; nextAllowedAt: Date }> {
+  const now = input.now ?? new Date();
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await prisma.$transaction(
+        async (tx) => {
+          const rows = await tx.$queryRaw<Array<{ next_batch_at: Date | null }>>(Prisma.sql`
+        SELECT next_batch_at
+        FROM sender_profiles
+        WHERE id = ${input.senderProfileId}::uuid
+        FOR UPDATE
+      `);
+          const sender = rows[0];
+          if (!sender)
+            throw new DomainError("SENDER_NOT_FOUND", "The sender profile is unavailable.", 404);
+          if (sender.next_batch_at && sender.next_batch_at > now)
+            return { allowed: false, nextAllowedAt: sender.next_batch_at };
+          const nextAllowedAt = new Date(now.getTime() + input.minIntervalSeconds * 1000);
+          await tx.senderProfile.update({
+            where: { id: input.senderProfileId },
+            data: { nextBatchAt: nextAllowedAt },
+          });
+          return { allowed: true, nextAllowedAt };
+        },
+        { isolationLevel: "Serializable" }
+      );
+    } catch (error) {
+      const serializationFailure =
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        (error.code === "P2034" ||
+          (error.code === "P2010" && String(error.meta?.code ?? "") === "40001"));
+      if (!serializationFailure || attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 5 * (attempt + 1)));
+    }
+  }
+  throw new DomainError("SENDER_SLOT_UNAVAILABLE", "Unable to claim the sender slot.", 503);
+}
+
 export async function reserveCampaignRecipients(input: {
   campaignId: string;
   senderProfileId: string;

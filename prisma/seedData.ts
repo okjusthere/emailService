@@ -54,6 +54,18 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         domain: "listings.homixny.com",
         verificationStatus: "UNVERIFIED",
         isDefault: true,
+        dailyLimit: 80,
+        batchSize: 1,
+        minBatchIntervalSeconds: 300,
+        sendWindowStart: "09:30",
+        sendWindowEnd: "16:30",
+        warmupEnabled: true,
+        warmupStartDate: new Date(),
+        warmupSchedule: [
+          { day: 1, limit: 30 },
+          { day: 3, limit: 50 },
+          { day: 5, limit: 80 },
+        ],
       },
     });
   }
