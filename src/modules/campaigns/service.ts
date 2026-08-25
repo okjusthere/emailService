@@ -445,7 +445,19 @@ export async function testSendCampaign(
       "External test sending is disabled; preview remains available.",
       409
     );
+  const actorUser = await prisma.user.findUnique({
+    where: { id: actor.userId },
+    select: { emailNormalized: true, displayName: true },
+  });
+  if (!actorUser)
+    throw new DomainError("TEST_RECIPIENT_UNAVAILABLE", "Your test email is unavailable.", 403);
   const email = normalizeEmail(emailInput);
+  if (email !== actorUser.emailNormalized)
+    throw new DomainError(
+      "TEST_RECIPIENT_MUST_BE_SELF",
+      "Test emails can only be sent to the signed-in user.",
+      403
+    );
   if (!config.testAllowlist.includes(email))
     throw new DomainError(
       "TEST_RECIPIENT_NOT_ALLOWED",
@@ -461,11 +473,12 @@ export async function testSendCampaign(
     );
   const snapshot = snapshotFromCampaign(campaign);
   snapshot.content.subject = `[TEST] ${snapshot.content.subject}`;
+  const testFullName = actorUser.displayName?.trim() || "Test Recipient";
   const rendered = await renderListingEmail({
     snapshot,
     recipient: {
-      firstName: "Test",
-      fullName: "Test Recipient",
+      firstName: testFullName.split(/\s+/)[0] || "Test",
+      fullName: testFullName,
       unsubscribeUrl: `${config.baseUrl}/unsubscribe?test=1`,
     },
     templateKey: campaign.templateKey,

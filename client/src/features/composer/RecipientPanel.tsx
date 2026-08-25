@@ -19,6 +19,7 @@ type Criteria = {
 export function RecipientPanel({
   summary,
   pending,
+  automatic,
   disabled,
   error,
   onGenerate,
@@ -27,6 +28,7 @@ export function RecipientPanel({
 }: {
   summary: Summary | null;
   pending: boolean;
+  automatic: boolean;
   disabled: boolean;
   error: Error | null;
   onGenerate: (criteria: Criteria) => void;
@@ -96,6 +98,14 @@ export function RecipientPanel({
             Adjust
           </button>
         </div>
+      ) : source === "nearby" && automatic && !error ? (
+        <div className="suggest-button automatic-recipient-state" aria-live="polite">
+          <Users />
+          <span>
+            <strong>{pending ? "Finding recipients from BBO…" : "Preparing recipients…"}</strong>
+            <small>Same ZIP plus 3 nearby ZIP codes · past 12 months</small>
+          </span>
+        </div>
       ) : source === "nearby" ? (
         <button
           className="suggest-button"
@@ -104,7 +114,13 @@ export function RecipientPanel({
         >
           <Users />
           <span>
-            <strong>{pending ? "Finding recipients…" : "Suggest recipients"}</strong>
+            <strong>
+              {pending
+                ? "Finding recipients…"
+                : error
+                  ? "Retry recipient search"
+                  : "Find recipients"}
+            </strong>
             <small>Same ZIP plus 3 nearby ZIP codes · past 12 months</small>
           </span>
         </button>

@@ -16,8 +16,9 @@ Rich email content and agent signatures pass an allowlist sanitizer. Preview use
 ## Email safety
 
 - Stable From profiles; listing Campaign Reply-To and signature are always derived from the listing's assigned Agent and cannot be overridden by Campaign input or sender fallback. No random domain/address rotation.
-- `disabled` makes no external call; `sandbox` enforces the allowlist both for test send and campaign recipient processing.
+- `disabled` makes no external call; `sandbox` enforces the allowlist both for test send and campaign recipient processing. Test-send API input must also match the authenticated user, so “Send test to …” cannot target the listing Agent or another allowlisted mailbox.
 - Live requires verified sender and readiness confirmations. Suppression is global and rechecked immediately before submit.
+- Sender-wide pacing is persisted and transactionally claimed before both new batches and safe retries; concurrent Campaigns cannot multiply the configured cadence.
 - Batch attempts are recorded before provider calls. Stable, non-PII HMAC-derived idempotency keys prevent unsafe duplicate retry; uncertain outcomes stop for manual reconciliation.
 - Unsubscribe tokens are signed, non-guessable bearer values; only their SHA-256 hash is stored on the recipient. Visible GET is non-mutating, one-click POST is idempotent.
 - Unsubscribe signing is independent of session signing. Verification tries the current secret, then a previous secret only until its configured expiry.

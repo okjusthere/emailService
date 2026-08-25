@@ -28,7 +28,7 @@ An ACTIVE listing requires a usable URL and hero image. Archiving database recor
 ## Audience and campaign aggregate
 
 - `saved_audiences`: versioned, validated JSON DSL, estimated count and audit ownership. The compiler accepts only enumerated fields/operators and Prisma query fragments—never arbitrary SQL.
-- `sender_profiles`: stable From identity, reply policy, timezone/window/weekdays, daily/batch limits, warm-up schedule, tracking preferences, verification/readiness and default profile.
+- `sender_profiles`: stable From identity, reply policy, timezone/window/weekdays, daily/batch limits, warm-up schedule, tracking preferences, verification/readiness and default profile. `next_batch_at` is the durable sender-wide lease boundary shared by every Campaign and safe retry.
 - `campaigns`: listing/audience/sender/template selection, editable content, optimistic `version`, state machine, scheduled/started/completed timestamps, frozen `content_snapshot`, aggregate counters and test-send evidence. The legacy `reply_to_agent_id` is kept for compatibility but is always synchronized to the listing's assigned Agent; rendered identity and provider Reply-To never use a different Campaign/global Agent.
 - `campaign_recipients`: immutable recipient/name/company snapshot, eligibility/suppression reason, independent `send_state`, `delivery_state`, engagement timestamps, provider ID and signed-unsubscribe-token hash.
 
@@ -49,7 +49,7 @@ Opened/clicked timestamps never overwrite bounced/complained delivery state. Eve
 
 The default deliverability settings require a sample of 100 accepted messages, then pause the campaign and suspend its sender at a complaint rate of 0.1% or bounce rate of 5%. The latest action-required alert is exposed in system readiness for operator review; thresholds are data, not hard-coded provider-policy claims.
 
-V3 requires no schema migration. Quick-start idempotency is serialized with a PostgreSQL advisory transaction lock and recent-draft lookup; publish idempotency continues to use the durable Job `unique_key`. Suggested-recipient criteria remain validated JSON in `saved_audiences.filter` / `campaigns.audience_filter`, including `excludeEmailedWithinDays`, and test evidence remains in the existing campaign/TestSendRecord fields.
+V3 quick-start idempotency is serialized with a PostgreSQL advisory transaction lock and recent-draft lookup; publish idempotency continues to use the durable Job `unique_key`. Migration `20260825124500_sender_global_pacing` adds `sender_profiles.next_batch_at` and applies the production gradual-send defaults. Suggested-recipient criteria remain validated JSON in `saved_audiences.filter` / `campaigns.audience_filter`, including `excludeEmailedWithinDays`, and test evidence remains in the existing campaign/TestSendRecord fields.
 
 ## Core invariants
 
@@ -60,3 +60,4 @@ V3 requires no schema migration. Quick-start idempotency is serialized with a Po
 5. Complaint/bounce state and global suppression are not undone by later delivered/opened events.
 6. Deletion is soft where historical campaign/audit integrity or public asset longevity matters.
 7. Listing Campaign email description prefers the complete marketing `long_description`; the 1000-character short description is a word-safe UI summary, not the delivered article.
+8. All Campaigns and retry jobs for the same sender serialize through `next_batch_at`; a second worker cannot create a parallel provider burst.

@@ -9,7 +9,7 @@ Homix Realty 的房源营销邮件工作台。系统将联系人、房源、受�
 - OneKey/BBO：按 MLS 号或地址搜索本地索引，通过 BBO 的合规 listing API 导入/刷新房源、复制媒体，并显式预览/导入最近 12–24 个月同邮编及相邻邮编成交经纪人受众；不存在 Homix/挂牌办公室所有权门禁。
 - AI 辅助：支持 OpenAI 与 Azure OpenAI Responses API、结构化输出、只使用 allowlist 房源事实，先保存 proposal，再由用户逐字段 Apply；`fake` 会明确标为测试文案且不能在生产 UI 中生成。
 - Prisma/PostgreSQL：冻结的 content/recipient snapshot、全局 suppression、发送批次/尝试、Webhook inbox、配额预留和 `SKIP LOCKED` durable jobs。
-- Resend：最多 100 封的 batch、同批次稳定 idempotency key、temporary retry、uncertain manual review、signed raw-body Webhook、visible/RFC 8058 unsubscribe。
+- Resend：发送人级全局慢速闸门、同批次稳定 idempotency key、temporary retry、uncertain manual review、signed raw-body Webhook、visible/RFC 8058 unsubscribe。
 - 资产：JPG/PNG/WebP 经过 Sharp 去 EXIF 并生成 1200/600 JPEG；PDF 保留；生产写入 Azure Blob，邮件只引用永久公开 URL。
 - Azure：Container Apps Web/Worker/Migration Job、PostgreSQL 16、Blob、Key Vault、Managed Identity、VNet/private endpoints、ACR、Application Insights 和可选告警。
 
@@ -41,11 +41,12 @@ OneKey 与 AI 同样默认禁用，不需要外部凭据即可启动。开发验
 ## Quick Start: Send a Listing Email
 
 1. 在 Home 输入 MLS 号或地址并选择房源。系统从 BBO 自动读取该 listing 的当前 OneKey Agent，按稳定 `memberKey` 创建或更新本地签名/Reply-To 身份，随后导入或复用房源并创建/复用最近 24 小时的草稿。不会回退到 Eric 或第一个本地 Agent；BBO 缺少 Active Agent 或有效邮箱时会明确阻止创建邮件。
-2. 默认选择 **Nearby active agents**；也可直接选择 Saved contact list 或安全 Custom segment。附近经纪人默认使用同邮编加最近 3 个邮编、过去 12 个月成交，并排除抑制、近期已发和同房源已联系地址。
-3. AI 生产配置可用时会自动写一次初稿并提供三个主题方案与改写风格；否则保留安全的人工起始文案。Subject、preview text、正文、CTA 都可直接编辑并自动保存。
-4. 在右侧 Desktop/Mobile 预览确认完整房源和 Listing Agent 落款，然后点击 **Send test to me** 测试当前版本。
-5. 测试成功后点击 **Review & send**，选择立即或定时发送并确认。服务端原子验证版本并创建不可变内容/收件人快照。
-6. 在 Campaigns 查看 In progress、Preparing、Scheduled、Sending、Paused 或 Sent，并在 Reports 查看汇总。已有房源的落款人可在 Property Library 的 **Signature & replies** 改绑；所有 DRAFT Campaign 会同步并要求重新测试，已冻结或已发送快照保持不变。旧 `/listings`、`/audiences`、`/analytics` 链接会重定向到新页面。
+2. 默认选择 **Nearby active agents** 后无需再点导入：Composer 会自动从 BBO 获取同邮编加最近 3 个邮编、过去 12 个月成交的合规经纪人，并排除抑制、近期已发和同房源已联系地址。也可改用 Saved contact list 或安全 Custom segment。
+3. 收件人准备完成后，AI 生产配置可用时会自动写一次初稿并提供三个主题方案与改写风格；否则保留安全的人工起始文案。Subject、preview text、正文、CTA 都可直接编辑并自动保存。
+4. 在右侧 Desktop/Mobile 预览确认完整房源和 Listing Agent 落款，然后点击显示当前登录邮箱的 **Send test to …**。测试只发给当前登录用户；邮件签名和 Reply-To 仍属于 Listing Agent。
+5. 测试成功后点击 **Review & send**，选择立即或定时发送并确认。确认页会显示全局发送节奏、每日上限和预计完成天数；服务端随后原子验证版本并创建不可变内容/收件人快照。
+6. 正式发送由所有 Campaign 共用的发送人级闸门控制：默认工作日 09:30–16:30（America/New_York），每 5 分钟 1 封、每天最多 80 封，并按 30/30/50/50/80 的 warm-up 阶梯逐步放量。重试也不能绕过该节奏。
+7. 在 Campaigns 查看 In progress、Preparing、Scheduled、Sending、Paused 或 Sent，并在 Reports 查看汇总。已有房源的落款人可在 Property Library 的 **Signature & replies** 改绑；所有 DRAFT Campaign 会同步并要求重新测试，已冻结或已发送快照保持不变。旧 `/listings`、`/audiences`、`/analytics` 链接会重定向到新页面。
 
 普通 Marketer 页面不需要理解 provider、model、audience filter、snapshot 或 worker；这些仍保留在服务端和管理员 Operations 中。旧 V2 API 继续兼容，自动保存使用 `If-Match`，测试和发布都要求当前版本。
 

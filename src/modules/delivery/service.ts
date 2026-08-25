@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { CampaignStatus, Prisma, type CampaignRecipient, type SenderProfile } from "@prisma/client";
 import { config } from "../../config/index.js";
 import { prisma } from "../../db/prisma.js";
-import { reserveCampaignRecipients } from "../../db/rawQueries.js";
+import { claimSenderDeliverySlot, reserveCampaignRecipients } from "../../db/rawQueries.js";
 import { inTransaction } from "../../db/transactions.js";
 import { createUnsubscribeToken, unsubscribeHeaders } from "../../email/compliance.js";
 import { getEmailProvider } from "../../email/providers/index.js";
@@ -538,6 +538,19 @@ export async function dispatchCampaign(payload: DispatchPayload): Promise<void> 
       campaign.senderProfile.allowedWeekdays
     );
     await scheduleDispatch(campaign.id, nextWindow, `window-${nextWindow.toISOString()}`);
+    return;
+  }
+  const senderSlot = await claimSenderDeliverySlot({
+    senderProfileId: campaign.senderProfileId,
+    minIntervalSeconds: campaign.senderProfile.minBatchIntervalSeconds,
+  });
+  if (!senderSlot.allowed) {
+    await scheduleDispatch(
+      campaign.id,
+      senderSlot.nextAllowedAt,
+      `sender-slot-${payload.sendBatchId ?? "next"}-${senderSlot.nextAllowedAt.toISOString()}`,
+      payload.sendBatchId
+    );
     return;
   }
   if (payload.sendBatchId) {

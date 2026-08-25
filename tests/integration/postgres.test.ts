@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { config } from "../../src/config/index.js";
 import { prisma } from "../../src/db/prisma.js";
-import { claimDueJob, reserveCampaignRecipients } from "../../src/db/rawQueries.js";
+import {
+  claimDueJob,
+  claimSenderDeliverySlot,
+  reserveCampaignRecipients,
+} from "../../src/db/rawQueries.js";
 import { inTransaction } from "../../src/db/transactions.js";
 import { FakeEmailProvider } from "../../src/email/providers/FakeEmailProvider.js";
 import type {
@@ -347,6 +351,31 @@ describe("PostgreSQL delivery invariants", () => {
     expect(await prisma.market.count()).toBeGreaterThanOrEqual(7);
     expect(await prisma.tag.count()).toBeGreaterThanOrEqual(5);
     expect(await prisma.senderProfile.count({ where: { isDefault: true } })).toBe(1);
+  });
+
+  it("allows only one concurrent sender-wide delivery slot", async () => {
+    const fixture = await createFixture(0);
+    const now = new Date("2026-08-25T15:00:00.000Z");
+    const claims = await Promise.all([
+      claimSenderDeliverySlot({
+        senderProfileId: fixture.sender.id,
+        minIntervalSeconds: 300,
+        now,
+      }),
+      claimSenderDeliverySlot({
+        senderProfileId: fixture.sender.id,
+        minIntervalSeconds: 300,
+        now,
+      }),
+    ]);
+
+    expect(claims.filter((claim) => claim.allowed)).toHaveLength(1);
+    expect(claims.filter((claim) => !claim.allowed)).toHaveLength(1);
+    expect(
+      claims.every((claim) => claim.nextAllowedAt.toISOString() === "2026-08-25T15:05:00.000Z")
+    ).toBe(true);
+    await prisma.campaign.delete({ where: { id: fixture.campaign.id } });
+    await prisma.senderProfile.delete({ where: { id: fixture.sender.id } });
   });
 
   it("preserves an operator-configured default sender when reseeded", async () => {
@@ -734,6 +763,10 @@ describe("PostgreSQL delivery invariants", () => {
 
   it("runs the complete campaign lifecycle while AI_PROVIDER is disabled", async () => {
     const fixture = await createRenderableCampaign();
+    await prisma.campaign.update({
+      where: { id: fixture.campaign.id },
+      data: { templateKey: "BROKER_PERSONAL" },
+    });
     const mutableConfig = config as {
       deliveryMode: "disabled" | "sandbox" | "live";
       testAllowlist: string[];
@@ -742,7 +775,7 @@ describe("PostgreSQL delivery invariants", () => {
     const originalMode = mutableConfig.deliveryMode;
     const originalAllowlist = mutableConfig.testAllowlist;
     const originalAiProvider = mutableConfig.aiProvider;
-    const testEmail = "admin@homixny.com";
+    const testEmail = "integration@homixny.com";
     try {
       mutableConfig.aiProvider = "disabled";
       const page = await listCampaigns({
@@ -790,6 +823,16 @@ describe("PostgreSQL delivery invariants", () => {
       ).rejects.toMatchObject({ code: "DELIVERY_DISABLED" });
 
       mutableConfig.deliveryMode = "sandbox";
+      mutableConfig.testAllowlist = [];
+      await expect(
+        testSendCampaign(
+          fixture.campaign.id,
+          testEmail,
+          fixture.campaign.version,
+          randomUUID(),
+          testActor()
+        )
+      ).rejects.toMatchObject({ code: "TEST_RECIPIENT_NOT_ALLOWED" });
       mutableConfig.testAllowlist = [testEmail];
       await expect(
         testSendCampaign(
@@ -799,7 +842,7 @@ describe("PostgreSQL delivery invariants", () => {
           randomUUID(),
           testActor()
         )
-      ).rejects.toMatchObject({ code: "TEST_RECIPIENT_NOT_ALLOWED" });
+      ).rejects.toMatchObject({ code: "TEST_RECIPIENT_MUST_BE_SELF" });
       await expect(
         testSendCampaign(
           fixture.campaign.id,
@@ -843,6 +886,7 @@ describe("PostgreSQL delivery invariants", () => {
         subject: "[TEST] Lifecycle campaign",
         headers: { "X-Homix-Test": "true" },
       });
+      expect(acceptedProvider.outbound[0]?.messages[0]?.html).toContain("Hi Integration,");
       await expect(
         testSendCampaign(
           fixture.campaign.id,
@@ -948,11 +992,11 @@ describe("PostgreSQL delivery invariants", () => {
     const originalAllowlist = mutableConfig.testAllowlist;
     try {
       mutableConfig.deliveryMode = "sandbox";
-      mutableConfig.testAllowlist = ["admin@homixny.com"];
+      mutableConfig.testAllowlist = ["integration@homixny.com"];
       setEmailProviderForTest(new FakeEmailProvider());
       await testSendCampaign(
         fixture.campaign.id,
-        "admin@homixny.com",
+        "integration@homixny.com",
         fixture.campaign.version,
         randomUUID(),
         testActor()
@@ -1044,7 +1088,7 @@ describe("PostgreSQL delivery invariants", () => {
     const originalAllowlist = mutableConfig.testAllowlist;
     try {
       mutableConfig.deliveryMode = "sandbox";
-      mutableConfig.testAllowlist = ["admin@homixny.com"];
+      mutableConfig.testAllowlist = ["integration@homixny.com"];
       await prisma.listing.update({
         where: { id: fixture.listing.id },
         data: { status: "DRAFT", publishedAt: null },
@@ -1061,7 +1105,7 @@ describe("PostgreSQL delivery invariants", () => {
       ).rejects.toMatchObject({ code: "CURRENT_TEST_SEND_REQUIRED" });
       await testSendCampaign(
         fixture.campaign.id,
-        "admin@homixny.com",
+        "integration@homixny.com",
         fixture.campaign.version,
         randomUUID(),
         testActor()

@@ -1,6 +1,7 @@
 import { AlertTriangle, Check, Send, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Campaign } from "../../app/types.js";
+import { estimateGradualDelivery } from "./deliveryEstimate.js";
 
 export function SendReviewDialog({
   campaign,
@@ -21,6 +22,13 @@ export function SendReviewDialog({
 }) {
   const [schedule, setSchedule] = useState(false);
   const [scheduledAt, setScheduledAt] = useState("");
+  const delivery = campaign.senderProfile
+    ? estimateGradualDelivery(
+        eligible,
+        campaign.senderProfile,
+        scheduledAt ? new Date(scheduledAt) : new Date()
+      )
+    : null;
   const dialogRef = useRef<HTMLElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -95,6 +103,29 @@ export function SendReviewDialog({
             <dt>Subject</dt>
             <dd>{campaign.subject}</dd>
           </div>
+          {delivery ? (
+            <>
+              <div>
+                <dt>Delivery pace</dt>
+                <dd>{delivery.cadence}</dd>
+              </div>
+              <div>
+                <dt>Daily maximum</dt>
+                <dd>
+                  {delivery.warmup
+                    ? `${delivery.currentDailyMaximum.toLocaleString()} initially · up to ${delivery.dailyMaximum.toLocaleString()}`
+                    : `Up to ${delivery.dailyMaximum.toLocaleString()}`}
+                </dd>
+              </div>
+              <div>
+                <dt>Estimated completion</dt>
+                <dd>
+                  About {delivery.businessDays} business{" "}
+                  {delivery.businessDays === 1 ? "day" : "days"}
+                </dd>
+              </div>
+            </>
+          ) : null}
         </dl>
         <label className="schedule-toggle">
           <input
@@ -119,6 +150,7 @@ export function SendReviewDialog({
           <AlertTriangle />
           <span>
             Unsubscribed, bounced, and recently contacted recipients will be excluded automatically.
+            {delivery?.warmup ? " Sender warm-up limits are also active." : ""}
           </span>
         </div>
         {error ? (
@@ -136,11 +168,7 @@ export function SendReviewDialog({
             onClick={() => onPublish(schedule ? new Date(scheduledAt).toISOString() : undefined)}
           >
             <Check size={17} />{" "}
-            {pending
-              ? "Preparing…"
-              : schedule
-                ? "Schedule email"
-                : `Send to ${eligible.toLocaleString()} recipients`}
+            {pending ? "Preparing…" : schedule ? "Schedule email" : "Start gradual send"}
           </button>
         </div>
       </section>

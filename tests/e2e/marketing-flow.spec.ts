@@ -404,6 +404,10 @@ test("completes the simplified listing email composer on desktop and mobile", as
     await new Promise((resolve) => setTimeout(resolve, 1_200));
     await route.continue();
   });
+  await page.route("**/api/v2/campaigns/*/recipients/onekey-nearby", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    await route.continue();
+  });
   await page.goto("/");
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Create a listing email" })).toBeVisible();
@@ -418,19 +422,21 @@ test("completes the simplified listing email composer on desktop and mobile", as
   await page.screenshot({ path: "artifacts/screenshots/home-search-results.png", fullPage: true });
   await page.getByRole("button", { name: /Use this property/ }).click();
   await expect(page.getByRole("heading", { name: "Create listing email" })).toBeVisible();
+  await expect(page.getByText("Finding recipients from BBO…")).toBeVisible();
   await page.screenshot({ path: "artifacts/screenshots/composer-desktop.png", fullPage: true });
+  await expect(page.getByText(/people ready/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Suggest recipients" })).toHaveCount(0);
   await expect(page.getByText("Writing your email…")).toBeVisible();
   await page.screenshot({ path: "artifacts/screenshots/composer-ai-writing.png", fullPage: true });
   await expect(page.getByText(/AI draft — review before sending/)).toBeVisible();
 
-  await page.getByRole("button", { name: "Suggest recipients" }).click();
-  await expect(page.getByText(/people ready/)).toBeVisible();
   const subject = page.getByLabel("Subject");
   await subject.fill(`Simplified composer ${Date.now()}`);
   await page.waitForTimeout(1_100);
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /Send test to/ }).click();
   await expect(page.locator(".test-status")).toContainText("Test sent to admin@homixny.com");
+  await expect(page.getByText(/Only you receive this test.*Fixture Agent/)).toBeVisible();
   await page.screenshot({
     path: "artifacts/screenshots/composer-test-complete.png",
     fullPage: true,
@@ -459,8 +465,11 @@ test("completes the simplified listing email composer on desktop and mobile", as
   await expect(reviewButton).toBeFocused();
   await reviewButton.click();
   await expect(page.getByRole("button", { name: "Close" })).toBeFocused();
+  await expect(page.getByText("Delivery pace")).toBeVisible();
+  await expect(page.getByText("Daily maximum")).toBeVisible();
+  await expect(page.getByText("Estimated completion")).toBeVisible();
   await page.screenshot({ path: "artifacts/screenshots/send-review-dialog.png", fullPage: true });
-  await page.getByRole("button", { name: /Send to 1 recipients/ }).click();
+  await page.getByRole("button", { name: "Start gradual send" }).click();
   await page.screenshot({ path: "artifacts/screenshots/campaign-sending.png", fullPage: true });
   await expect(page.getByText("Sent")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("External Agent")).toBeVisible({ timeout: 10_000 });
@@ -474,9 +483,7 @@ test("completes the simplified listing email composer on desktop and mobile", as
   await page.screenshot({ path: "artifacts/screenshots/settings-operations.png", fullPage: true });
 });
 
-test("keeps the fallback draft, restores autosave, and schedules a saved list", async ({
-  page,
-}) => {
+test("keeps the manual draft, restores autosave, and schedules a saved list", async ({ page }) => {
   await page.route("**/api/v2/ai/status", (route) =>
     route.fulfill({
       contentType: "application/json",
@@ -492,12 +499,12 @@ test("keeps the fallback draft, restores autosave, and schedules a saved list", 
   ).toBeVisible();
   await page.getByRole("button", { name: /Use this property/ }).click();
   await expect(page.getByRole("heading", { name: "Create listing email" })).toBeVisible();
-  await expect(page.getByLabel("Subject")).toHaveValue(/New listing:/i);
+  await expect(page.getByLabel("Subject")).not.toHaveValue("");
 
   await page.getByRole("tab", { name: "Saved contact list" }).click();
   const list = page.getByLabel("Saved list");
   await list.selectOption({ index: 1 });
-  await expect(page.getByRole("button", { name: "Send test to me" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Send test to admin@homixny.com" })).toBeEnabled();
   const restoredSubject = `Saved schedule ${Date.now()}`;
   await page.getByLabel("Subject").fill(restoredSubject);
   const campaignId = page.url().match(/campaigns\/([^/]+)/)?.[1];
@@ -510,7 +517,7 @@ test("keeps the fallback draft, restores autosave, and schedules a saved list", 
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByLabel("Subject")).toHaveValue(restoredSubject);
-  await page.getByRole("button", { name: "Send test to me" }).click();
+  await page.getByRole("button", { name: "Send test to admin@homixny.com" }).click();
   await expect(page.locator(".test-status")).toContainText("Test sent to admin@homixny.com");
   await page.getByRole("button", { name: "Review & send" }).click();
   await page.getByLabel("Schedule for later").check();
