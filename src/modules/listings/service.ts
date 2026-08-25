@@ -112,16 +112,36 @@ export async function updateListing(id: string, body: unknown, actor: ActorConte
         "An email-safe hero image is required before activation.",
         409
       );
+    if (input.agentId && input.agentId !== before.agentId) {
+      const agent = await tx.agent.findUnique({ where: { id: input.agentId } });
+      if (!agent || !agent.isActive)
+        throw new DomainError(
+          "LISTING_AGENT_NOT_FOUND",
+          "Choose an active Homix listing agent.",
+          409
+        );
+    }
     const listing = await tx.listing.update({
       where: { id },
       data: { ...input, updatedByUserId: actor.userId },
     });
+    if (input.agentId && input.agentId !== before.agentId) {
+      await tx.campaign.updateMany({
+        where: { listingId: id, status: "DRAFT" },
+        data: {
+          replyToAgentId: input.agentId,
+          version: { increment: 1 },
+          lastSuccessfulTestAt: null,
+          lastTestedVersion: null,
+        },
+      });
+    }
     await writeAudit(tx, actor, {
       action: "listing.update",
       entityType: "listing",
       entityId: id,
-      before: { status: before.status },
-      after: { status: listing.status },
+      before: { status: before.status, agentId: before.agentId },
+      after: { status: listing.status, agentId: listing.agentId },
     });
     return listing;
   });

@@ -6,10 +6,11 @@ import { campaignsApi } from "../api/campaigns.js";
 import { listingsApi } from "../api/listings.js";
 import { oneKeyApi, type OneKeySearchResult as SearchResult } from "../api/onekey.js";
 import { queryKeys } from "../api/queryKeys.js";
-import { settingsApi } from "../api/settings.js";
 import { CampaignRow } from "../features/campaigns/CampaignRow.js";
+import { matchingAgentId } from "../features/properties/agentSelection.js";
 import { api } from "../lib/api.js";
 import { EmptyBlock, ErrorBlock, LoadingBlock } from "../components/ui/Feedback.js";
+import { settingsApi } from "../api/settings.js";
 
 function track(
   event: string,
@@ -26,6 +27,7 @@ export function HomePage() {
   const navigate = useNavigate();
   const [input, setInput] = useState("");
   const [query, setQuery] = useState("");
+  const [agentSelections, setAgentSelections] = useState<Record<string, string>>({});
   const search = useQuery({
     queryKey: queryKeys.propertySearch(query),
     queryFn: ({ signal }) => oneKeyApi.search(query, signal),
@@ -44,15 +46,23 @@ export function HomePage() {
     queryFn: () => listingsApi.list("limit=5&status=ACTIVE"),
   });
   const start = useMutation({
-    mutationFn: async (result: SearchResult) => {
+    mutationFn: async ({
+      result,
+      agentId,
+      useExisting = false,
+    }: {
+      result: SearchResult;
+      agentId?: string;
+      useExisting?: boolean;
+    }) => {
       let listingId = result.importedListingId;
-      if (!listingId) {
-        const agentId = agents.data?.items.find((agent) => agent.isActive)?.id;
+      if (!useExisting) {
         if (!agentId)
-          throw new Error("Add an active listing agent in Settings before importing a property.");
+          throw new Error("Choose the Homix agent whose details should sign this email.");
         const imported = await oneKeyApi.import(result.sourceKey, agentId);
         listingId = imported.listing.id;
       }
+      if (!listingId) throw new Error("This property could not be prepared for an email.");
       const response = await campaignsApi.quickStart(listingId);
       track("campaign_start", undefined, response.campaign.id);
       return response.campaign;
@@ -116,46 +126,79 @@ export function HomePage() {
             </EmptyBlock>
           ) : null}
           <div className="property-result-grid">
-            {search.data?.items.map((item) => (
-              <article className="property-result" key={item.sourceKey}>
-                <div className="property-result-image">
-                  {item.imageUrls?.[0] ? <img src={item.imageUrls[0]} alt="" /> : <span>H</span>}
-                </div>
-                <div>
-                  <span className="property-source">{item.standardStatus ?? "OneKey MLS"}</span>
-                  <h3>{item.unparsedAddress}</h3>
-                  <small className="property-result-facts">
-                    MLS {item.listingId ?? item.sourceKey}
-                    {item.propertyType
-                      ? ` · ${item.propertyType.replaceAll("_", " ").toLowerCase()}`
-                      : ""}
-                    {item.transactionType
-                      ? ` · ${item.transactionType.replaceAll("_", " ").toLowerCase()}`
-                      : ""}
-                  </small>
-                  <p>
-                    {item.city}, {item.stateCode} {item.postalCode}
-                  </p>
-                  {item.listPrice ? (
-                    <strong>
-                      {new Intl.NumberFormat("en-US", {
-                        style: "currency",
-                        currency: "USD",
-                        maximumFractionDigits: 0,
-                      }).format(Number(item.listPrice))}
-                    </strong>
-                  ) : null}
-                </div>
-                <button
-                  className="button secondary"
-                  disabled={start.isPending}
-                  onClick={() => start.mutate(item)}
-                >
-                  {start.isPending ? "Preparing your listing email…" : "Use this property"}
-                  {!start.isPending ? <ArrowRight size={16} /> : null}
-                </button>
-              </article>
-            ))}
+            {search.data?.items.map((item) => {
+              const activeAgents = agents.data?.items.filter((agent) => agent.isActive) ?? [];
+              const selectedAgentId =
+                agentSelections[item.sourceKey] ??
+                matchingAgentId(item.listAgentFullName, activeAgents);
+              return (
+                <article className="property-result" key={item.sourceKey}>
+                  <div className="property-result-image">
+                    {item.imageUrls?.[0] ? <img src={item.imageUrls[0]} alt="" /> : <span>H</span>}
+                  </div>
+                  <div>
+                    <span className="property-source">{item.standardStatus ?? "OneKey MLS"}</span>
+                    <h3>{item.unparsedAddress}</h3>
+                    <small className="property-result-facts">
+                      MLS {item.listingId ?? item.sourceKey}
+                      {item.propertyType
+                        ? ` · ${item.propertyType.replaceAll("_", " ").toLowerCase()}`
+                        : ""}
+                      {item.transactionType
+                        ? ` · ${item.transactionType.replaceAll("_", " ").toLowerCase()}`
+                        : ""}
+                    </small>
+                    {item.listAgentFullName ? <p>Listing agent: {item.listAgentFullName}</p> : null}
+                    <p>
+                      {item.city}, {item.stateCode} {item.postalCode}
+                    </p>
+                    {item.listPrice ? (
+                      <strong>
+                        {new Intl.NumberFormat("en-US", {
+                          style: "currency",
+                          currency: "USD",
+                          maximumFractionDigits: 0,
+                        }).format(Number(item.listPrice))}
+                      </strong>
+                    ) : null}
+                  </div>
+                  <label className="property-agent-select">
+                    Email signature & replies
+                    <select
+                      aria-label={`Homix agent for ${item.unparsedAddress}`}
+                      value={selectedAgentId}
+                      onChange={(event) =>
+                        setAgentSelections((current) => ({
+                          ...current,
+                          [item.sourceKey]: event.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">Choose Homix agent</option>
+                      {activeAgents.map((agent) => (
+                        <option key={agent.id} value={agent.id}>
+                          {agent.displayName}
+                        </option>
+                      ))}
+                    </select>
+                    {!selectedAgentId && item.listAgentFullName ? (
+                      <small>
+                        Add {item.listAgentFullName} in Settings, or explicitly choose another Homix
+                        agent.
+                      </small>
+                    ) : null}
+                  </label>
+                  <button
+                    className="button secondary"
+                    disabled={start.isPending || !selectedAgentId}
+                    onClick={() => start.mutate({ result: item, agentId: selectedAgentId })}
+                  >
+                    {start.isPending ? "Preparing your listing email…" : "Use this property"}
+                    {!start.isPending ? <ArrowRight size={16} /> : null}
+                  </button>
+                </article>
+              );
+            })}
           </div>
           {start.error ? <ErrorBlock error={start.error} /> : null}
         </section>
@@ -197,12 +240,15 @@ export function HomePage() {
                 key={listing.id}
                 onClick={() =>
                   start.mutate({
-                    sourceKey: listing.sourceKey ?? listing.id,
-                    importedListingId: listing.id,
-                    unparsedAddress: listing.addressLine1,
-                    city: listing.city,
-                    stateCode: listing.stateCode,
-                    postalCode: listing.postalCode,
+                    useExisting: true,
+                    result: {
+                      sourceKey: listing.sourceKey ?? listing.id,
+                      importedListingId: listing.id,
+                      unparsedAddress: listing.addressLine1,
+                      city: listing.city,
+                      stateCode: listing.stateCode,
+                      postalCode: listing.postalCode,
+                    },
                   })
                 }
               >

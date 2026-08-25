@@ -17,6 +17,7 @@ export type ListingAsset = {
 
 export type Listing = {
   id: string;
+  agentId?: string;
   title: string;
   addressLine1: string;
   city: string;

@@ -221,14 +221,55 @@ function addressLine(item: OneKeyListing) {
   );
 }
 
-export async function importOneKeyListing(sourceKey: string, agentId: string, actor: ActorContext) {
+async function resolveImportAgent(requestedAgentId: string) {
+  const selected = await prisma.agent.findUnique({ where: { id: requestedAgentId } });
+  if (!selected || !selected.isActive)
+    throw new DomainError(
+      "LISTING_AGENT_NOT_FOUND",
+      "Choose an active Homix listing agent before importing this property.",
+      409
+    );
+  return selected;
+}
+
+export async function importOneKeyListing(
+  sourceKey: string,
+  requestedAgentId: string,
+  actor: ActorContext
+) {
   const item = await loadOneKeyListing(sourceKey, true);
+  const agent = await resolveImportAgent(requestedAgentId);
   const facts = sourceFacts(item);
   const result = await prisma.$transaction(async (tx) => {
     const existing = await tx.listing.findUnique({
       where: { source_sourceKey: { source: "ONEKEY", sourceKey: item.sourceKey } },
     });
-    if (existing) return { listing: existing, created: false };
+    if (existing) {
+      if (existing.agentId !== agent.id) {
+        const listing = await tx.listing.update({
+          where: { id: existing.id },
+          data: { agentId: agent.id, updatedByUserId: actor.userId },
+        });
+        await tx.campaign.updateMany({
+          where: { listingId: existing.id, status: "DRAFT" },
+          data: {
+            replyToAgentId: agent.id,
+            version: { increment: 1 },
+            lastSuccessfulTestAt: null,
+            lastTestedVersion: null,
+          },
+        });
+        await writeAudit(tx, actor, {
+          action: "onekey.listing_agent_reconciled",
+          entityType: "listing",
+          entityId: existing.id,
+          before: { agentId: existing.agentId },
+          after: { agentId: agent.id, listAgentFullName: item.listAgentFullName },
+        });
+        return { listing, created: false };
+      }
+      return { listing: existing, created: false };
+    }
     const listing = await tx.listing.create({
       data: {
         internalName: `OneKey ${item.listingId ?? item.sourceKey}`,
@@ -262,7 +303,7 @@ export async function importOneKeyListing(sourceKey: string, agentId: string, ac
         sourceSyncedAt: new Date(),
         sourceSyncStatus: "CURRENT",
         sourceSnapshot: json(item.raw),
-        agentId,
+        agentId: agent.id,
         createdByUserId: actor.userId,
         updatedByUserId: actor.userId,
       },

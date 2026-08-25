@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Plus, Search } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { Campaign, ListResponse, Listing } from "../app/types.js";
 import { EmptyBlock, ErrorBlock, LoadingBlock } from "../components/ui/Feedback.js";
 import { Page } from "../components/ui/Page.js";
 import { api } from "../lib/api.js";
 
-type Agent = { id: string; displayName: string; isActive: boolean };
+type Agent = { id: string; displayName: string; email: string; isActive: boolean };
 
 function slug(value: string) {
   return `${value
@@ -31,10 +31,6 @@ export function PropertyLibraryPage() {
     queryKey: ["agents-for-properties"],
     queryFn: () => api<ListResponse<Agent>>("/api/v2/agents?limit=100"),
   });
-  const activeAgent = useMemo(
-    () => agents.data?.items.find((item) => item.isActive),
-    [agents.data]
-  );
   const start = useMutation({
     mutationFn: (listingId: string) =>
       api<{ campaign: Campaign }>("/api/v2/campaigns/quick-start", {
@@ -46,7 +42,6 @@ export function PropertyLibraryPage() {
   });
   const create = useMutation({
     mutationFn: async (form: HTMLFormElement) => {
-      if (!activeAgent) throw new Error("Add an active listing agent in Settings first.");
       const values = new FormData(form);
       const addressLine1 = String(values.get("addressLine1"));
       const heroPhoto = values.get("heroPhoto");
@@ -72,7 +67,7 @@ export function PropertyLibraryPage() {
           priceUponRequest: false,
           highlights: [],
           listingUrl: "https://www.homixny.com/listings",
-          agentId: activeAgent.id,
+          agentId: values.get("agentId"),
         }),
       });
       const asset = new FormData();
@@ -89,6 +84,18 @@ export function PropertyLibraryPage() {
       setParams({});
       void client.invalidateQueries({ queryKey: ["property-library"] });
       start.mutate(listing.id);
+    },
+  });
+  const assignAgent = useMutation({
+    mutationFn: ({ listingId, agentId }: { listingId: string; agentId: string }) =>
+      api<Listing>(`/api/v2/listings/${listingId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ agentId }),
+      }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["property-library"] });
+      void client.invalidateQueries({ queryKey: ["home-listings"] });
+      void client.invalidateQueries({ queryKey: ["home-campaigns"] });
     },
   });
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -113,6 +120,21 @@ export function PropertyLibraryPage() {
               <p>Add the essentials and a hero photo, then start the email.</p>
             </div>
           </div>
+          <label>
+            Listing agent for signature & replies
+            <select name="agentId" required defaultValue="">
+              <option value="" disabled>
+                Choose Homix agent
+              </option>
+              {agents.data?.items
+                .filter((agent) => agent.isActive)
+                .map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.displayName}
+                  </option>
+                ))}
+            </select>
+          </label>
           <label>
             Street address
             <input name="addressLine1" required />
@@ -211,6 +233,32 @@ export function PropertyLibraryPage() {
                   <p>
                     {listing.city}, {listing.stateCode} {listing.postalCode}
                   </p>
+                  <label className="property-agent-select">
+                    Signature & replies
+                    <select
+                      aria-label={`Homix agent for ${listing.addressLine1}`}
+                      value={listing.agentId ?? ""}
+                      disabled={assignAgent.isPending}
+                      onChange={(event) =>
+                        assignAgent.mutate({ listingId: listing.id, agentId: event.target.value })
+                      }
+                    >
+                      <option value="" disabled>
+                        Choose Homix agent
+                      </option>
+                      {agents.data?.items
+                        .filter((agent) => agent.isActive)
+                        .map((agent) => (
+                          <option key={agent.id} value={agent.id}>
+                            {agent.displayName}
+                          </option>
+                        ))}
+                    </select>
+                    <small>
+                      Currently {listing.agent?.displayName ?? "unassigned"}. This agent signs the
+                      email and receives replies.
+                    </small>
+                  </label>
                 </div>
                 <button
                   className="button secondary"
@@ -228,6 +276,7 @@ export function PropertyLibraryPage() {
           </EmptyBlock>
         )}
         {start.error ? <ErrorBlock error={start.error} /> : null}
+        {assignAgent.error ? <ErrorBlock error={assignAgent.error} /> : null}
       </section>
     </Page>
   );

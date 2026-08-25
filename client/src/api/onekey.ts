@@ -13,6 +13,7 @@ export type OneKeySearchResult = {
   standardStatus?: string | null;
   propertyType?: string | null;
   transactionType?: string | null;
+  listAgentFullName?: string | null;
   imageUrls?: string[];
 };
 
