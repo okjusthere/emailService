@@ -63,9 +63,9 @@ POST /api/v2/listings/{id}/ai/{generate|apply}
 POST /api/v2/campaigns/{id}/ai/{generate|apply}
 ```
 
-Search reads the local PostgreSQL OneKey index first, then the configured provider. Import is idempotent by `(source, sourceKey)` and never applies a listing-office ownership gate. Recipient candidate parameters are bounded: `nearbyZipCount` 0–5, `closedMonths` 12–24 and `limit` 1–5000. Candidate creation is a separate, confirmed mutation and creates a saved audience; preview alone never writes contacts.
+Search reads the local PostgreSQL OneKey index first, then the configured provider. Import is idempotent by `(source, sourceKey)` and never applies a listing-office ownership gate. Unless an administrative compatibility override supplies `agentId`, import fetches BBO's listing-scoped Agent contact, upserts the local Agent by `(sourceSystem, sourceAgentKey)`, and binds the listing, signature and Reply-To automatically. It never falls back to the first local Agent. Recipient candidate parameters are bounded: `nearbyZipCount` 0–5, `closedMonths` 12–24 and `limit` 1–5000. Candidate creation is a separate, confirmed mutation and creates a saved audience; preview alone never writes contacts.
 
-The production adapter calls BBO server-to-server with a bearer key. The token and raw provider responses are never returned. AI generation stores model, provider, fact hash and proposal; only enumerated selected fields are applied, and no endpoint passes contacts, recipients or secrets to the AI provider.
+The production adapter calls BBO server-to-server with a bearer key. The token and raw provider responses are never returned. The `marketing:read` key may resolve only the Agent attached to a specified viewable listing and remains denied from the full BBO Agent roster. AI generation stores model, provider, fact hash and proposal; only enumerated selected fields are applied, and no endpoint passes contacts, recipients or secrets to the AI provider.
 
 For listing Campaigns, the server derives `replyToAgentId`, rendered signature and provider `Reply-To` from the selected listing's assigned Agent on every create/update/duplicate and preview/snapshot. A caller-supplied legacy `replyToAgentId` cannot override that identity.
 

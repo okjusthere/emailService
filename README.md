@@ -36,11 +36,11 @@ npm run dev:worker
 
 默认 `EMAIL_DELIVERY_MODE=disabled`，不会调用外部邮件发送。测试使用 `FakeEmailProvider`，也不会调用 Resend。Compose 默认把 PostgreSQL 映射到 `localhost:5434`，可用 `POSTGRES_PORT` 覆盖。
 
-OneKey 与 AI 同样默认禁用，不需要外部凭据即可启动。开发验收可设置 `ONEKEY_PROVIDER=fake` 和 `AI_PROVIDER=fake`。生产使用 `ONEKEY_PROVIDER=bbo`，由 BBO 提供 OneKey listing/媒体/收件人数据；BBO key 必须仅授予 `marketing:read` 与读取 listing/events 所需的最小 scope。若 BBO 的媒体使用独立主机，必须用 `ONEKEY_MEDIA_ALLOWED_ORIGINS` 明确列出完整 origin（例如 `https://onekeymls.kevv.ai`）；不接受路径或通配域名。
+OneKey 与 AI 同样默认禁用，不需要外部凭据即可启动。开发验收可设置 `ONEKEY_PROVIDER=fake` 和 `AI_PROVIDER=fake`。生产使用 `ONEKEY_PROVIDER=bbo`，由 BBO 提供 OneKey listing、该 listing 的当前 Agent 联系资料、媒体和收件人数据；BBO key 必须仅授予 `marketing:read` 与读取 listing/events 所需的最小 scope。该 scope 只能按 listing 读取 Agent，不能读取完整 roster。若 BBO 的媒体使用独立主机，必须用 `ONEKEY_MEDIA_ALLOWED_ORIGINS` 明确列出完整 origin（例如 `https://onekeymls.kevv.ai`）；不接受路径或通配域名。
 
 ## Quick Start: Send a Listing Email
 
-1. 在 Home 输入 MLS 号或地址并选择房源；在 **Email signature & replies** 确认 Homix Agent。只有 OneKey 挂牌姓名与本地 Agent 完全一致时系统才会预选，不会回退到第一个 Agent。缺少 Agent 时先在 Settings 添加姓名、真实邮箱、电话和执照信息。系统随后导入或复用房源，并创建/复用最近 24 小时的草稿。
+1. 在 Home 输入 MLS 号或地址并选择房源。系统从 BBO 自动读取该 listing 的当前 OneKey Agent，按稳定 `memberKey` 创建或更新本地签名/Reply-To 身份，随后导入或复用房源并创建/复用最近 24 小时的草稿。不会回退到 Eric 或第一个本地 Agent；BBO 缺少 Active Agent 或有效邮箱时会明确阻止创建邮件。
 2. 默认选择 **Nearby active agents**；也可直接选择 Saved contact list 或安全 Custom segment。附近经纪人默认使用同邮编加最近 3 个邮编、过去 12 个月成交，并排除抑制、近期已发和同房源已联系地址。
 3. AI 生产配置可用时会自动写一次初稿并提供三个主题方案与改写风格；否则保留安全的人工起始文案。Subject、preview text、正文、CTA 都可直接编辑并自动保存。
 4. 在右侧 Desktop/Mobile 预览确认完整房源和 Listing Agent 落款，然后点击 **Send test to me** 测试当前版本。

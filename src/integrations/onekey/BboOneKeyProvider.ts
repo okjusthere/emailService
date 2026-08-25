@@ -1,7 +1,32 @@
 import { z } from "zod";
 import { DomainError } from "../../shared/errors.js";
 import { normalizeOneKeyListing } from "./normalize.js";
-import type { ListingSourceProvider, OneKeyChangePage, RecipientCandidateResult } from "./types.js";
+import type {
+  ListingSourceProvider,
+  OneKeyChangePage,
+  OneKeyListingAgent,
+  RecipientCandidateResult,
+} from "./types.js";
+
+const listingAgentResultSchema = z.object({
+  listingKey: z.string(),
+  agent: z.object({
+    memberKey: z.string().min(1).max(255),
+    memberMlsId: z.string().max(255).optional(),
+    fullName: z.string().trim().min(1).max(200),
+    firstName: z.string().trim().max(100).optional(),
+    lastName: z.string().trim().max(100).optional(),
+    email: z.email(),
+    mobilePhone: z.string().max(50).optional(),
+    directPhone: z.string().max(50).optional(),
+    phone: z.string().max(50).optional(),
+    stateLicense: z.string().max(100).optional(),
+    status: z.string().max(50).optional(),
+    headshotUrl: z.string().max(2048).optional(),
+    officeKey: z.string().max(255).optional(),
+    officeName: z.string().max(255).optional(),
+  }),
+});
 
 const recipientResultSchema = z.object({
   listingKey: z.string(),
@@ -51,6 +76,20 @@ export class BboOneKeyProvider implements ListingSourceProvider {
         signal: controller.signal,
       });
       if (!response.ok) {
+        if (path.includes("/marketing/listings/") && path.endsWith("/agent")) {
+          if (response.status === 404)
+            throw new DomainError(
+              "ONEKEY_LISTING_AGENT_NOT_FOUND",
+              "BBO could not find the current listing agent in its OneKey member roster.",
+              409
+            );
+          if (response.status === 409)
+            throw new DomainError(
+              "ONEKEY_LISTING_AGENT_CONTACT_UNAVAILABLE",
+              "The current OneKey listing agent does not have an active roster record with a valid email address.",
+              409
+            );
+        }
         if (response.status === 404)
           throw new DomainError("ONEKEY_LISTING_NOT_FOUND", "OneKey listing not found.", 404);
         throw new DomainError(
@@ -102,6 +141,12 @@ export class BboOneKeyProvider implements ListingSourceProvider {
       .object({ listing: z.unknown() })
       .parse(await this.request(`/listings/${encodeURIComponent(listingId)}`));
     return normalizeOneKeyListing(payload.listing);
+  }
+
+  async getListingAgent(sourceKey: string): Promise<OneKeyListingAgent> {
+    return listingAgentResultSchema.parse(
+      await this.request(`/marketing/listings/${encodeURIComponent(sourceKey)}/agent`)
+    ).agent;
   }
 
   async getRecipientCandidates(

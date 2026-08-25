@@ -1,4 +1,9 @@
-import type { ListingSourceProvider, OneKeyListing, RecipientCandidateResult } from "./types.js";
+import type {
+  ListingSourceProvider,
+  OneKeyListing,
+  OneKeyListingAgent,
+  RecipientCandidateResult,
+} from "./types.js";
 
 export const fakeOneKeyListing: OneKeyListing = {
   sourceKey: "KEY900000001",
@@ -43,6 +48,22 @@ export class FakeOneKeyProvider implements ListingSourceProvider {
   async getByMLS(listingId: string) {
     if (listingId !== fakeOneKeyListing.listingId) throw new Error("Fixture listing not found");
     return fakeOneKeyListing;
+  }
+  async getListingAgent(sourceKey: string): Promise<OneKeyListingAgent> {
+    if (sourceKey !== fakeOneKeyListing.sourceKey) throw new Error("Fixture listing not found");
+    return {
+      memberKey: "KEY_FIXTURE_AGENT",
+      memberMlsId: "FIXTURE100",
+      fullName: "Fixture Agent",
+      firstName: "Fixture",
+      lastName: "Agent",
+      email: "fixture-agent@homixny.com",
+      phone: "718-555-0100",
+      stateLicense: "10401300000",
+      status: "Active",
+      officeKey: "KEY_FIXTURE_OFFICE",
+      officeName: "Homix Realty",
+    };
   }
   async getRecipientCandidates(
     sourceKey: string,

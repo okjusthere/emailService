@@ -309,6 +309,10 @@ model Agent {
   licenseNumber   String?    @map("license_number")
   headshotUrl     String?    @map("headshot_url")
   signatureHtml   String?    @map("signature_html")
+  sourceSystem    String?    @map("source_system")
+  sourceAgentKey  String?    @map("source_agent_key")
+  sourceMlsId     String?    @map("source_mls_id")
+  sourceSyncedAt  DateTime?  @map("source_synced_at") @db.Timestamptz(3)
   isActive        Boolean    @default(true) @map("is_active")
   createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -316,6 +320,7 @@ model Agent {
   listings        Listing[]
   campaigns       Campaign[]
 
+  @@unique([sourceSystem, sourceAgentKey])
   @@map("agents")
 }
 
@@ -940,30 +945,30 @@ model ExternalSyncCursor {
 }
 
 model OneKeyListingIndex {
-  sourceKey             String   @id @map("source_key")
-  listingId             String?  @map("listing_id")
-  normalizedAddress     String   @map("normalized_address")
-  unparsedAddress       String   @map("unparsed_address")
+  sourceKey             String    @id @map("source_key")
+  listingId             String?   @map("listing_id")
+  normalizedAddress     String    @map("normalized_address")
+  unparsedAddress       String    @map("unparsed_address")
   city                  String
-  stateCode             String   @map("state_code")
-  postalCode            String   @map("postal_code")
+  stateCode             String    @map("state_code")
+  postalCode            String    @map("postal_code")
   county                String?
-  standardStatus        String?  @map("standard_status")
-  propertyType          String?  @map("property_type")
-  propertySubType       String?  @map("property_sub_type")
-  listPrice             Decimal? @map("list_price") @db.Decimal(14, 2)
-  bedroomsTotal         Int?     @map("bedrooms_total")
-  bathroomsTotalInteger Int?     @map("bathrooms_total_integer")
-  livingArea            Decimal? @map("living_area") @db.Decimal(14, 2)
-  yearBuilt             Int?     @map("year_built")
-  publicRemarks         String?  @map("public_remarks")
-  listAgentFullName     String?  @map("list_agent_full_name")
-  listOfficeName        String?  @map("list_office_name")
-  imageUrls             String[] @default([]) @map("image_urls")
+  standardStatus        String?   @map("standard_status")
+  propertyType          String?   @map("property_type")
+  propertySubType       String?   @map("property_sub_type")
+  listPrice             Decimal?  @map("list_price") @db.Decimal(14, 2)
+  bedroomsTotal         Int?      @map("bedrooms_total")
+  bathroomsTotalInteger Int?      @map("bathrooms_total_integer")
+  livingArea            Decimal?  @map("living_area") @db.Decimal(14, 2)
+  yearBuilt             Int?      @map("year_built")
+  publicRemarks         String?   @map("public_remarks")
+  listAgentFullName     String?   @map("list_agent_full_name")
+  listOfficeName        String?   @map("list_office_name")
+  imageUrls             String[]  @default([]) @map("image_urls")
   sourceModifiedAt      DateTime? @map("source_modified_at") @db.Timestamptz(3)
-  sourceSnapshot        Json     @map("source_snapshot")
-  syncedAt              DateTime @default(now()) @map("synced_at") @db.Timestamptz(3)
-  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  sourceSnapshot        Json      @map("source_snapshot")
+  syncedAt              DateTime  @default(now()) @map("synced_at") @db.Timestamptz(3)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@unique([listingId])
   @@index([normalizedAddress])

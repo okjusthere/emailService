@@ -97,6 +97,40 @@ describe("OneKey provider boundary", () => {
       message: "The BBO listing-data service is temporarily unavailable.",
     });
   });
+
+  it("loads only the listing-scoped BBO Agent contact contract", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      expect(String(input)).toBe(
+        "https://bbo.example.test/api/v1/marketing/listings/KEY900000001/agent"
+      );
+      return new Response(
+        JSON.stringify({
+          listingKey: "KEY900000001",
+          agent: {
+            memberKey: "MEMBER1",
+            memberMlsId: "12345",
+            fullName: "Si Zhang",
+            firstName: "Si",
+            lastName: "Zhang",
+            email: "si.zhang@example.com",
+            phone: "718-555-0101",
+            stateLicense: "10401399999",
+            status: "Active",
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new BboOneKeyProvider("https://bbo.example.test/api/v1", "bbo-test-key", 1000);
+    await expect(provider.getListingAgent("KEY900000001")).resolves.toMatchObject({
+      memberKey: "MEMBER1",
+      fullName: "Si Zhang",
+      email: "si.zhang@example.com",
+      phone: "718-555-0101",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("AI provider boundary", () => {

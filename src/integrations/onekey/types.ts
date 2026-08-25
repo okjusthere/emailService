@@ -37,6 +37,23 @@ export interface OneKeyRecipientCandidate {
   representedBuyer: boolean;
 }
 
+export interface OneKeyListingAgent {
+  memberKey: string;
+  memberMlsId?: string;
+  fullName: string;
+  firstName?: string;
+  lastName?: string;
+  email: string;
+  mobilePhone?: string;
+  directPhone?: string;
+  phone?: string;
+  stateLicense?: string;
+  status?: string;
+  headshotUrl?: string;
+  officeKey?: string;
+  officeName?: string;
+}
+
 export interface RecipientCandidateResult {
   listingKey: string;
   postalCode: string;
@@ -62,6 +79,7 @@ export interface ListingSourceProvider {
   search(input: { query: string; limit: number; offset: number }): Promise<OneKeyListing[]>;
   getBySourceKey(sourceKey: string): Promise<OneKeyListing>;
   getByMLS(listingId: string): Promise<OneKeyListing>;
+  getListingAgent(sourceKey: string): Promise<OneKeyListingAgent>;
   getRecipientCandidates(
     sourceKey: string,
     input: { nearbyZipCount: number; closedMonths: number; limit: number }

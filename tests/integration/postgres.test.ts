@@ -374,6 +374,75 @@ describe("PostgreSQL delivery invariants", () => {
     expect(await prisma.senderProfile.count()).toBe(1);
   });
 
+  it("imports the current OneKey listing Agent and repairs a legacy wrong signature", async () => {
+    const marker = randomUUID();
+    const initial = await importOneKeyListing("KEY900000001", undefined, testActor());
+    const syncedAgent = await prisma.agent.findUniqueOrThrow({
+      where: {
+        sourceSystem_sourceAgentKey: {
+          sourceSystem: "bbo-onekey",
+          sourceAgentKey: "KEY_FIXTURE_AGENT",
+        },
+      },
+    });
+    expect(syncedAgent).toMatchObject({
+      displayName: "Fixture Agent",
+      email: "fixture-agent@homixny.com",
+      phone: "718-555-0100",
+      licenseNumber: "10401300000",
+      sourceMlsId: "FIXTURE100",
+      isActive: true,
+    });
+
+    const wrongAgent = await prisma.agent.create({
+      data: {
+        firstName: "Legacy",
+        lastName: "Default",
+        displayName: `Legacy Default ${marker}`,
+        email: `legacy-${marker}@example.com`,
+        emailNormalized: `legacy-${marker}@example.com`,
+      },
+    });
+    await prisma.listing.update({
+      where: { id: initial.listing.id },
+      data: { agentId: wrongAgent.id },
+    });
+    const sender = await prisma.senderProfile.findFirstOrThrow({
+      where: { isActive: true, verificationStatus: "VERIFIED" },
+    });
+    const draft = await prisma.campaign.create({
+      data: {
+        name: `Legacy wrong signature ${marker}`,
+        listingId: initial.listing.id,
+        senderProfileId: sender.id,
+        replyToAgentId: wrongAgent.id,
+        templateKey: "LISTING_BRANDED",
+        subject: "Legacy wrong signature",
+        audienceFilter: {},
+        lastSuccessfulTestAt: new Date(),
+        lastTestedVersion: 1,
+        createdByUserId: actorId,
+        updatedByUserId: actorId,
+      },
+    });
+
+    const repaired = await importOneKeyListing("KEY900000001", undefined, testActor());
+    const listing = await prisma.listing.findUniqueOrThrow({ where: { id: repaired.listing.id } });
+    const repairedDraft = await prisma.campaign.findUniqueOrThrow({ where: { id: draft.id } });
+    expect(listing.agentId).toBe(syncedAgent.id);
+    expect(repairedDraft).toMatchObject({
+      replyToAgentId: syncedAgent.id,
+      version: 2,
+      lastSuccessfulTestAt: null,
+      lastTestedVersion: null,
+    });
+    expect(
+      await prisma.agent.count({
+        where: { sourceSystem: "bbo-onekey", sourceAgentKey: "KEY_FIXTURE_AGENT" },
+      })
+    ).toBe(1);
+  });
+
   it("reconciles an imported listing and its draft to the explicitly selected agent", async () => {
     const marker = randomUUID();
     const wrongAgent = await prisma.agent.create({

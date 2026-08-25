@@ -26,4 +26,9 @@ export function getOneKeyProvider(): ListingSourceProvider {
   );
 }
 
-export type { ListingSourceProvider, OneKeyListing, RecipientCandidateResult } from "./types.js";
+export type {
+  ListingSourceProvider,
+  OneKeyListing,
+  OneKeyListingAgent,
+  RecipientCandidateResult,
+} from "./types.js";

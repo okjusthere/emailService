@@ -23,9 +23,9 @@ export const oneKeyApi = {
       `/api/v2/onekey/listings/search?q=${encodeURIComponent(query)}&limit=12`,
       { signal }
     ),
-  import: (sourceKey: string, agentId: string) =>
+  import: (sourceKey: string, agentId?: string) =>
     api<{ listing: Listing }>(`/api/v2/onekey/listings/${encodeURIComponent(sourceKey)}/import`, {
       method: "POST",
-      body: JSON.stringify({ agentId }),
+      body: JSON.stringify(agentId ? { agentId } : {}),
     }),
 };

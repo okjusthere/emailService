@@ -7,10 +7,8 @@ import { listingsApi } from "../api/listings.js";
 import { oneKeyApi, type OneKeySearchResult as SearchResult } from "../api/onekey.js";
 import { queryKeys } from "../api/queryKeys.js";
 import { CampaignRow } from "../features/campaigns/CampaignRow.js";
-import { matchingAgentId } from "../features/properties/agentSelection.js";
 import { api } from "../lib/api.js";
 import { EmptyBlock, ErrorBlock, LoadingBlock } from "../components/ui/Feedback.js";
-import { settingsApi } from "../api/settings.js";
 
 function track(
   event: string,
@@ -27,15 +25,10 @@ export function HomePage() {
   const navigate = useNavigate();
   const [input, setInput] = useState("");
   const [query, setQuery] = useState("");
-  const [agentSelections, setAgentSelections] = useState<Record<string, string>>({});
   const search = useQuery({
     queryKey: queryKeys.propertySearch(query),
     queryFn: ({ signal }) => oneKeyApi.search(query, signal),
     enabled: query.length >= 2,
-  });
-  const agents = useQuery({
-    queryKey: ["agents-for-import"],
-    queryFn: () => settingsApi.agents(),
   });
   const recent = useQuery({
     queryKey: ["home-campaigns"],
@@ -48,18 +41,14 @@ export function HomePage() {
   const start = useMutation({
     mutationFn: async ({
       result,
-      agentId,
       useExisting = false,
     }: {
       result: SearchResult;
-      agentId?: string;
       useExisting?: boolean;
     }) => {
       let listingId = result.importedListingId;
       if (!useExisting) {
-        if (!agentId)
-          throw new Error("Choose the Homix agent whose details should sign this email.");
-        const imported = await oneKeyApi.import(result.sourceKey, agentId);
+        const imported = await oneKeyApi.import(result.sourceKey);
         listingId = imported.listing.id;
       }
       if (!listingId) throw new Error("This property could not be prepared for an email.");
@@ -127,10 +116,6 @@ export function HomePage() {
           ) : null}
           <div className="property-result-grid">
             {search.data?.items.map((item) => {
-              const activeAgents = agents.data?.items.filter((agent) => agent.isActive) ?? [];
-              const selectedAgentId =
-                agentSelections[item.sourceKey] ??
-                matchingAgentId(item.listAgentFullName, activeAgents);
               return (
                 <article className="property-result" key={item.sourceKey}>
                   <div className="property-result-image">
@@ -162,36 +147,15 @@ export function HomePage() {
                       </strong>
                     ) : null}
                   </div>
-                  <label className="property-agent-select">
-                    Email signature & replies
-                    <select
-                      aria-label={`Homix agent for ${item.unparsedAddress}`}
-                      value={selectedAgentId}
-                      onChange={(event) =>
-                        setAgentSelections((current) => ({
-                          ...current,
-                          [item.sourceKey]: event.target.value,
-                        }))
-                      }
-                    >
-                      <option value="">Choose Homix agent</option>
-                      {activeAgents.map((agent) => (
-                        <option key={agent.id} value={agent.id}>
-                          {agent.displayName}
-                        </option>
-                      ))}
-                    </select>
-                    {!selectedAgentId && item.listAgentFullName ? (
-                      <small>
-                        Add {item.listAgentFullName} in Settings, or explicitly choose another Homix
-                        agent.
-                      </small>
-                    ) : null}
-                  </label>
+                  <p className="property-agent-auto">
+                    {item.listAgentFullName
+                      ? `Signature and replies automatically use ${item.listAgentFullName}'s current OneKey contact details.`
+                      : "Signature and replies automatically use the current OneKey listing Agent."}
+                  </p>
                   <button
                     className="button secondary"
-                    disabled={start.isPending || !selectedAgentId}
-                    onClick={() => start.mutate({ result: item, agentId: selectedAgentId })}
+                    disabled={start.isPending}
+                    onClick={() => start.mutate({ result: item })}
                   >
                     {start.isPending ? "Preparing your listing email…" : "Use this property"}
                     {!start.isPending ? <ArrowRight size={16} /> : null}
@@ -240,7 +204,7 @@ export function HomePage() {
                 key={listing.id}
                 onClick={() =>
                   start.mutate({
-                    useExisting: true,
+                    useExisting: listing.source !== "ONEKEY" || !listing.sourceKey,
                     result: {
                       sourceKey: listing.sourceKey ?? listing.id,
                       importedListingId: listing.id,
