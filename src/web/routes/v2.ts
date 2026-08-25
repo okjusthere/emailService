@@ -289,7 +289,7 @@ router.post(
   requireRole("ADMIN", "MARKETER"),
   async (req, res) => {
     const sourceKey = z.string().trim().min(1).max(255).parse(req.params.sourceKey);
-    const { agentId } = z.object({ agentId: z.uuid() }).parse(req.body);
+    const { agentId } = z.object({ agentId: z.uuid().optional() }).parse(req.body ?? {});
     const result = await importOneKeyListing(sourceKey, agentId, actorFromRequest(req));
     res.status(result.created ? 201 : 200).json(result);
   }

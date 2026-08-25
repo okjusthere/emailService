@@ -6,7 +6,11 @@ import { processAndStoreAsset } from "../assets/service.js";
 import type { ActorContext } from "../audit/service.js";
 import { writeAudit } from "../audit/service.js";
 import { summarizePublicRemarks } from "./remarks.js";
-import { getOneKeyProvider, type OneKeyListing } from "../../integrations/onekey/index.js";
+import {
+  getOneKeyProvider,
+  type OneKeyListing,
+  type OneKeyListingAgent,
+} from "../../integrations/onekey/index.js";
 import { isAllowedOneKeyMediaUrl } from "../../integrations/onekey/mediaPolicy.js";
 import { normalizeAddress } from "../../integrations/onekey/normalize.js";
 import { DomainError } from "../../shared/errors.js";
@@ -232,13 +236,107 @@ async function resolveImportAgent(requestedAgentId: string) {
   return selected;
 }
 
+function sourceAgentNames(contact: OneKeyListingAgent) {
+  const fullName = contact.fullName.trim();
+  const parts = fullName.split(/\s+/).filter(Boolean);
+  return {
+    fullName,
+    firstName: contact.firstName?.trim() || parts[0] || fullName,
+    lastName: contact.lastName?.trim() || parts.slice(1).join(" "),
+  };
+}
+
+function safeAgentHeadshot(value?: string) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function syncOneKeyListingAgent(sourceKey: string, actor: ActorContext) {
+  const contact = await getOneKeyProvider().getListingAgent(sourceKey);
+  const emailNormalized = normalizeEmail(contact.email);
+  const names = sourceAgentNames(contact);
+  const sourceSystem = "bbo-onekey";
+
+  return prisma.$transaction(async (tx) => {
+    const [bySource, byEmail] = await Promise.all([
+      tx.agent.findUnique({
+        where: {
+          sourceSystem_sourceAgentKey: {
+            sourceSystem,
+            sourceAgentKey: contact.memberKey,
+          },
+        },
+      }),
+      tx.agent.findUnique({ where: { emailNormalized } }),
+    ]);
+    if (bySource && byEmail && bySource.id !== byEmail.id)
+      throw new DomainError(
+        "ONEKEY_AGENT_IDENTITY_CONFLICT",
+        "The OneKey listing agent email is already assigned to a different local agent.",
+        409
+      );
+    if (
+      byEmail?.sourceSystem &&
+      (byEmail.sourceSystem !== sourceSystem || byEmail.sourceAgentKey !== contact.memberKey)
+    )
+      throw new DomainError(
+        "ONEKEY_AGENT_IDENTITY_CONFLICT",
+        "The OneKey listing agent identity conflicts with an existing synchronized agent.",
+        409
+      );
+
+    const existing = bySource ?? byEmail;
+    const data = {
+      firstName: names.firstName,
+      lastName: names.lastName,
+      displayName: names.fullName,
+      email: contact.email.trim(),
+      emailNormalized,
+      phone:
+        contact.phone?.trim() || contact.mobilePhone?.trim() || contact.directPhone?.trim() || null,
+      licenseNumber: contact.stateLicense?.trim() || null,
+      headshotUrl: safeAgentHeadshot(contact.headshotUrl),
+      sourceSystem,
+      sourceAgentKey: contact.memberKey,
+      sourceMlsId: contact.memberMlsId?.trim() || null,
+      sourceSyncedAt: new Date(),
+      isActive: true,
+    };
+    const agent = existing
+      ? await tx.agent.update({ where: { id: existing.id }, data })
+      : await tx.agent.create({ data });
+    await writeAudit(tx, actor, {
+      action: existing ? "onekey.agent_sync" : "onekey.agent_import",
+      entityType: "agent",
+      entityId: agent.id,
+      before: existing
+        ? { sourceAgentKey: existing.sourceAgentKey, displayName: existing.displayName }
+        : undefined,
+      after: {
+        sourceSystem,
+        sourceAgentKey: contact.memberKey,
+        sourceMlsId: contact.memberMlsId,
+        displayName: names.fullName,
+      },
+    });
+    return agent;
+  });
+}
+
 export async function importOneKeyListing(
   sourceKey: string,
-  requestedAgentId: string,
+  requestedAgentId: string | undefined,
   actor: ActorContext
 ) {
   const item = await loadOneKeyListing(sourceKey, true);
-  const agent = await resolveImportAgent(requestedAgentId);
+  const agent = requestedAgentId
+    ? await resolveImportAgent(requestedAgentId)
+    : await syncOneKeyListingAgent(sourceKey, actor);
   const facts = sourceFacts(item);
   const result = await prisma.$transaction(async (tx) => {
     const existing = await tx.listing.findUnique({
@@ -333,6 +431,7 @@ export async function refreshOneKeyListing(listingId: string, actor: ActorContex
     throw new DomainError("ONEKEY_LISTING_NOT_FOUND", "Imported OneKey listing not found.", 404);
   try {
     const item = await loadOneKeyListing(before.sourceKey, true);
+    const agent = await syncOneKeyListingAgent(before.sourceKey, actor);
     const changed = Object.entries(sourceFacts(item))
       .filter(
         ([key, value]) =>
@@ -353,14 +452,30 @@ export async function refreshOneKeyListing(listingId: string, actor: ActorContex
           sourceSyncStatus: "CURRENT",
           sourceSnapshot: json(item.raw),
           sourceWarnings: Prisma.JsonNull,
+          agentId: agent.id,
           updatedByUserId: actor.userId,
         },
       });
+      if (before.agentId !== agent.id)
+        await tx.campaign.updateMany({
+          where: { listingId, status: "DRAFT" },
+          data: {
+            replyToAgentId: agent.id,
+            version: { increment: 1 },
+            lastSuccessfulTestAt: null,
+            lastTestedVersion: null,
+          },
+        });
       await writeAudit(tx, actor, {
         action: "onekey.listing_refresh",
         entityType: "listing",
         entityId: listing.id,
-        after: { changedSourceFields: changed, marketingOverridesPreserved: true },
+        after: {
+          changedSourceFields: changed,
+          marketingOverridesPreserved: true,
+          agentId: agent.id,
+          previousAgentId: before.agentId,
+        },
       });
       return listing;
     });

@@ -1,11 +1,11 @@
 # Data model
 
-`prisma/schema.prisma` is the source of truth. Deployable migrations are `20260821190229_initial` and `20260822090000_predeploy_patch`; migrations are replayed with `prisma migrate deploy`, never production `db push`. All timestamps representing instants use `timestamptz`; sender quota day is stored as a date in the sender timezone.
+`prisma/schema.prisma` is the source of truth. Deployable migrations are kept under `prisma/migrations` and replayed with `prisma migrate deploy`, never production `db push`. All timestamps representing instants use `timestamptz`; sender quota day is stored as a date in the sender timezone.
 
 ## Identity and reference data
 
 - `users`: normalized unique email, optional Entra object ID, ADMIN/MARKETER/VIEWER and active flag.
-- `agents`: broker display/signature/Reply-To identity, optionally linked one-to-one to a user.
+- `agents`: broker display/signature/Reply-To identity, optionally linked one-to-one to a user. BBO-synchronized listing Agents retain `source_system`, stable `source_agent_key`, MLS ID and last-sync time so changed contact details update the same identity instead of creating duplicates.
 - `tags`, `markets`, `property_interests`: normalized reference vocabulary. `markets.parent_id` supports hierarchy.
 - `contact_tags`, `contact_markets`, `contact_property_interests`: explicit many-to-many targeting joins.
 

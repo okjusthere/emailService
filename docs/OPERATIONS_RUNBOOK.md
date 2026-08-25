@@ -67,7 +67,7 @@ Keep `EMAIL_DELIVERY_MODE=disabled` while enabling `ONEKEY_PROVIDER=bbo`. Instal
 1. Test Connection.
 2. Run initial sync and wait for the cursor success/count.
 3. Search the fixture/approved listing by MLS number and address.
-4. Confirm **Email signature & replies** is the intended Homix Agent before import. The UI may preselect only an exact OneKey/local name match and must never silently fall back to the first Agent. If the Agent is missing, add the verified identity in Settings, then import, retry media if needed and verify assets are Homix-hosted.
+4. Import the listing and confirm **Signature & replies** shows the current OneKey listing Agent. Import automatically reads the listing-scoped Agent contact from BBO and upserts it by stable `memberKey`; it must never fall back to the first local Agent. A missing/inactive roster Agent or invalid email must stop the flow with an explicit error. Manual Agent creation is only a fallback for manually created properties or an approved override.
 5. Refresh and confirm user marketing overrides remain unchanged.
 6. Preview recipient candidates before explicit import. Confirm the policy is last 12–24 months Closed, listing and buyer sides deduplicated, active agents with valid email, Homix office excluded, same ZIP plus 0–5 nearest configured ZIPs.
 

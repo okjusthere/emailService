@@ -22,6 +22,8 @@ type Agent = {
   email: string;
   phone?: string | null;
   title?: string | null;
+  sourceSystem?: string | null;
+  sourceSyncedAt?: string | null;
   isActive: boolean;
 };
 type Readiness = {
@@ -187,7 +189,10 @@ export function SettingsPage({ user }: { user: User }) {
                   <div key={agent.id}>
                     <span>
                       <strong>{agent.displayName}</strong>
-                      <small>{agent.email}</small>
+                      <small>
+                        {agent.email}
+                        {agent.sourceSystem === "bbo-onekey" ? " · Synced from OneKey" : ""}
+                      </small>
                     </span>
                     <StatusBadge value={agent.isActive ? "ACTIVE" : "INACTIVE"} />
                   </div>
@@ -195,12 +200,12 @@ export function SettingsPage({ user }: { user: User }) {
               </div>
             ) : (
               <EmptyBlock title="No listing agents">
-                Add an agent before importing a listing.
+                OneKey listing agents appear automatically when you choose a property.
               </EmptyBlock>
             )}
             {user.role === "ADMIN" ? (
               <details className="settings-add-agent">
-                <summary>Add listing agent</summary>
+                <summary>Add manual listing agent</summary>
                 <form onSubmit={submitAgent}>
                   <label>
                     First name

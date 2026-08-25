@@ -1242,7 +1242,7 @@ paths:
       {
         tags: [OneKey],
         operationId: importOneKeyListing,
-        summary: Import any viewable listing into a draft without an ownership gate,
+        summary: Import a viewable listing and automatically synchronize its listing Agent from BBO,
         requestBody: { $ref: "#/components/requestBodies/JsonBody" },
         responses: { "201": { $ref: "#/components/responses/Success" } },
       }
