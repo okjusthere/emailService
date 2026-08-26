@@ -1215,7 +1215,7 @@ paths:
       {
         tags: [OneKey],
         operationId: searchOneKeyListings,
-        summary: Search the local OneKey index first and BBO provider second,
+        summary: Search the local OneKey index first and BBO provider second; bare numeric MLS values automatically match BBO KEY-prefixed IDs,
         parameters:
           [
             {

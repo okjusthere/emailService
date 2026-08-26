@@ -130,15 +130,9 @@ export async function searchOneKeyListings(queryInput: string, limit = 20) {
   const query = queryInput.trim();
   if (query.length < 2 || query.length > 200)
     throw new DomainError("ONEKEY_SEARCH_INVALID", "Enter 2–200 characters to search.");
-  const normalized = normalizeAddress(query);
+  const where = oneKeySearchWhere(query);
   const local = await prisma.oneKeyListingIndex.findMany({
-    where: {
-      OR: [
-        { sourceKey: { equals: query, mode: "insensitive" } },
-        { listingId: { equals: query, mode: "insensitive" } },
-        { normalizedAddress: { contains: normalized } },
-      ],
-    },
+    where,
     take: limit,
     orderBy: [{ sourceModifiedAt: "desc" }, { sourceKey: "asc" }],
   });
@@ -149,13 +143,7 @@ export async function searchOneKeyListings(queryInput: string, limit = 20) {
     providerUsed = true;
   }
   const items = await prisma.oneKeyListingIndex.findMany({
-    where: {
-      OR: [
-        { sourceKey: { equals: query, mode: "insensitive" } },
-        { listingId: { equals: query, mode: "insensitive" } },
-        { normalizedAddress: { contains: normalized } },
-      ],
-    },
+    where,
     take: limit,
     orderBy: [{ sourceModifiedAt: "desc" }, { sourceKey: "asc" }],
   });
@@ -167,6 +155,20 @@ export async function searchOneKeyListings(queryInput: string, limit = 20) {
   return {
     items: items.map((item) => ({ ...item, importedListingId: importedByKey.get(item.sourceKey) })),
     source: providerUsed ? "local+provider" : "local",
+  };
+}
+
+function oneKeySearchWhere(query: string): Prisma.OneKeyListingIndexWhereInput {
+  const prefixed = /^KEY(\d+)$/i.exec(query);
+  const bare = /^(\d+)$/.exec(query);
+  const digits = prefixed?.[1] ?? bare?.[1];
+  const identifiers = digits ? [digits, `KEY${digits}`] : [query];
+  return {
+    OR: [
+      { sourceKey: { in: identifiers, mode: "insensitive" } },
+      { listingId: { in: identifiers, mode: "insensitive" } },
+      { normalizedAddress: { contains: normalizeAddress(query) } },
+    ],
   };
 }
 

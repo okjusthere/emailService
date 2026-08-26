@@ -16,6 +16,11 @@ import type {
 import { setEmailProviderForTest } from "../../src/email/providers/index.js";
 import type { ListingEmailSnapshot } from "../../src/email/render.js";
 import {
+  FakeOneKeyProvider,
+  fakeOneKeyListing,
+} from "../../src/integrations/onekey/FakeOneKeyProvider.js";
+import { setOneKeyProviderForTests } from "../../src/integrations/onekey/index.js";
+import {
   createCampaign,
   listCampaigns,
   markCampaignReady,
@@ -44,6 +49,7 @@ import { upsertSuppression } from "../../src/modules/suppressions/domain.js";
 import {
   configureCampaignOneKeyRecipients,
   importOneKeyListing,
+  searchOneKeyListings,
 } from "../../src/modules/onekey/service.js";
 import { getPrivateObjectStorage } from "../../src/storage/PrivateObjectStorage.js";
 import { completeClaimedJob, failClaimedJob } from "../../src/worker/jobRunner.js";
@@ -340,6 +346,39 @@ describe("PostgreSQL delivery invariants", () => {
   afterAll(async () => {
     setEmailProviderForTest(undefined);
     await prisma.$disconnect();
+  });
+
+  it("returns a BBO listing whose MLS ID adds KEY to a bare user search", async () => {
+    const sourceKey = `KEY${randomUUID().replaceAll("-", "")}`;
+    const provider = new FakeOneKeyProvider();
+    let providerQuery = "";
+    provider.search = async (input) => {
+      providerQuery = input.query;
+      return [
+        {
+          ...fakeOneKeyListing,
+          sourceKey,
+          listingId: "KEY1033074",
+          raw: { fixture: "prefixed-mls-regression" },
+        },
+      ];
+    };
+    setOneKeyProviderForTests(provider);
+    try {
+      const result = await searchOneKeyListings(" 1033074 ", 20);
+      expect(providerQuery).toBe("1033074");
+      expect(result).toMatchObject({
+        source: "local+provider",
+        items: [{ sourceKey, listingId: "KEY1033074" }],
+      });
+      await expect(searchOneKeyListings("key1033074", 20)).resolves.toMatchObject({
+        source: "local",
+        items: [{ sourceKey, listingId: "KEY1033074" }],
+      });
+    } finally {
+      setOneKeyProviderForTests(undefined);
+      await prisma.oneKeyListingIndex.deleteMany({ where: { sourceKey } });
+    }
   });
 
   it("migrates from empty PostgreSQL and seeds reference data idempotently", async () => {
