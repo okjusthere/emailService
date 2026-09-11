@@ -1,3 +1,5 @@
+import type { PosterHighlights } from "./posterHighlights.js";
+
 export type AiTone = "professional" | "warm" | "concise" | "luxury";
 
 export interface ListingCopyProposal {
@@ -20,6 +22,7 @@ export interface CampaignCopyProposal {
 export interface AiCopyProvider {
   readonly name: string;
   readonly model: string;
+  extractPosterHighlights?(facts: Record<string, unknown>): Promise<PosterHighlights>;
   generateListing(input: {
     tone: AiTone;
     facts: Record<string, unknown>;

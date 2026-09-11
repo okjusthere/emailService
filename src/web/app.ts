@@ -14,6 +14,7 @@ import { requestContext } from "./middleware/requestContext.js";
 import { mutationAudit } from "./middleware/mutationAudit.js";
 import { localDevLoginRouter, v2Router, assetStorage } from "./routes/v2.js";
 import { publicRouter } from "./routes/public.js";
+import { homixRouter } from "./routes/homix.js";
 
 interface LoggedRequest {
   id?: unknown;
@@ -86,6 +87,7 @@ export function createApp() {
     }
   });
   app.use("/api/public", publicRouter);
+  app.use("/api/integrations/homix/v1", homixRouter);
   app.get("/unsubscribe", (req, res) => {
     const token = typeof req.query.token === "string" ? req.query.token : "";
     const safeToken = token.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 1000);

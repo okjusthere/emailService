@@ -269,6 +269,7 @@ enum UnsubscribeSource {
 }
 
 model User {
+  portalAgentId        Int?                     @unique @map("portal_agent_id")
   id                   String                   @id @default(uuid()) @db.Uuid
   entraObjectId        String?                  @unique @map("entra_object_id")
   email                String
@@ -608,6 +609,10 @@ model SavedAudience {
 }
 
 model Campaign {
+  sourceApplication       String?             @map("source_application")
+  portalOwnerAgentId      Int?                @map("portal_owner_agent_id")
+  portalRequestKey        String?             @map("portal_request_key")
+  marketingIdentity       Json?               @map("marketing_identity")
   id                      String              @id @default(uuid()) @db.Uuid
   name                    String
   type                    CampaignType        @default(LISTING)
@@ -662,6 +667,8 @@ model Campaign {
   @@index([startedAt])
   @@index([listingId])
   @@index([createdAt])
+  @@unique([portalOwnerAgentId, portalRequestKey])
+  @@index([sourceApplication, portalOwnerAgentId, updatedAt])
   @@map("campaigns")
 }
 

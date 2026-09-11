@@ -22,6 +22,7 @@ import { localDate } from "../delivery/quota.js";
 import { assertCampaignTransition, isCampaignEditable } from "./stateMachine.js";
 import { campaignInputSchema } from "./schemas.js";
 import { resolveListingAgentIdentity } from "./listingAgentIdentity.js";
+import { campaignPortalIdentity, type PortalCampaignContext } from "../auth/portal.js";
 
 function priceText(listing: {
   askingPrice: Prisma.Decimal | null;
@@ -55,11 +56,21 @@ function snapshotFromCampaign(
       "Listing requires an email-safe hero image.",
       409
     );
-  const listingAgent = resolveListingAgentIdentity({
-    listingAgent: campaign.listing.agent,
-    legacyCampaignAgent: campaign.replyToAgent,
-    legacyFixedReplyToEmail: campaign.senderProfile.fixedReplyToEmail,
-  });
+  const portalIdentity = campaignPortalIdentity(campaign);
+  const listingAgent = portalIdentity
+    ? {
+        name: portalIdentity.name,
+        email: portalIdentity.email,
+        phone: portalIdentity.phone,
+        title: portalIdentity.title,
+        headshotUrl: portalIdentity.photoUrl ?? undefined,
+        signatureHtml: undefined,
+      }
+    : resolveListingAgentIdentity({
+        listingAgent: campaign.listing.agent,
+        legacyCampaignAgent: campaign.replyToAgent,
+        legacyFixedReplyToEmail: campaign.senderProfile.fixedReplyToEmail,
+      });
   const replyTo = listingAgent.email;
   const facts: Array<{ label: string; value: string }> = [];
   if (campaign.listing.buildingSqFt)
@@ -100,14 +111,14 @@ function snapshotFromCampaign(
       signatureHtml: listingAgent.signatureHtml,
     },
     sender: {
-      fromName: campaign.senderProfile.fromName,
+      fromName: portalIdentity?.companyName ?? campaign.senderProfile.fromName,
       fromEmail: campaign.senderProfile.fromEmail,
       replyTo,
     },
     company: {
-      name: config.companyName,
-      postalAddress: config.companyPostalAddress,
-      website: config.companyWebsite,
+      name: portalIdentity?.companyName ?? config.companyName,
+      postalAddress: portalIdentity?.companyAddress ?? config.companyPostalAddress,
+      website: portalIdentity?.companyWebsite ?? config.companyWebsite,
     },
     content: {
       subject: campaign.subject,
@@ -251,7 +262,11 @@ function quickStartName(address: string, now = new Date()) {
   return `${address} · ${date}`.slice(0, 200);
 }
 
-export async function quickStartCampaign(listingId: string, actor: ActorContext) {
+export async function quickStartCampaign(
+  listingId: string,
+  actor: ActorContext,
+  portal?: PortalCampaignContext & { portalRequestKey: string }
+) {
   return inTransaction(async (tx) => {
     const lockKey = `quick-start:${actor.userId}:${listingId}`;
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
@@ -266,7 +281,16 @@ export async function quickStartCampaign(listingId: string, actor: ActorContext)
         listingId,
         createdByUserId: actor.userId,
         status: "DRAFT",
-        updatedAt: { gte: new Date(Date.now() - QUICK_START_REUSE_HOURS * 3_600_000) },
+        ...(portal
+          ? {
+              sourceApplication: portal.sourceApplication,
+              portalOwnerAgentId: portal.portalOwnerAgentId,
+              portalRequestKey: portal.portalRequestKey,
+            }
+          : {
+              sourceApplication: null,
+              updatedAt: { gte: new Date(Date.now() - QUICK_START_REUSE_HOURS * 3_600_000) },
+            }),
       },
       orderBy: { updatedAt: "desc" },
       include: { listing: true, senderProfile: true, replyToAgent: true, savedAudience: true },
@@ -286,7 +310,11 @@ export async function quickStartCampaign(listingId: string, actor: ActorContext)
     }
 
     const sender = await tx.senderProfile.findFirst({
-      where: { isActive: true, verificationStatus: "VERIFIED" },
+      where: {
+        isActive: true,
+        verificationStatus: "VERIFIED",
+        ...(portal ? { id: portal.senderProfileId } : {}),
+      },
       orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
     });
     if (!sender)
@@ -298,6 +326,14 @@ export async function quickStartCampaign(listingId: string, actor: ActorContext)
     const subject = `New listing: ${listing.title}`.slice(0, 150);
     const campaign = await tx.campaign.create({
       data: {
+        ...(portal
+          ? {
+              sourceApplication: portal.sourceApplication,
+              portalOwnerAgentId: portal.portalOwnerAgentId,
+              portalRequestKey: portal.portalRequestKey,
+              marketingIdentity: portal.marketingIdentity,
+            }
+          : {}),
         name: quickStartName(listing.addressLine1),
         listingId,
         senderProfileId: sender.id,

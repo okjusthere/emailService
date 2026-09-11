@@ -1269,6 +1269,47 @@ describe("PostgreSQL delivery invariants", () => {
     }
   });
 
+  it("keeps Portal marketing identity separate from the shared listing agent", async () => {
+    const fixture = await createRenderableCampaign();
+    const context = {
+      sourceApplication: "homixliving" as const,
+      portalOwnerAgentId: 901,
+      portalRequestKey: randomUUID(),
+      senderProfileId: fixture.sender.id,
+      marketingIdentity: {
+        agentId: 901,
+        name: "Portal Marketing Agent",
+        email: "portal-agent@example.com",
+        phone: "+1 212 555 0101",
+        title: "Licensed Salesperson",
+        licenseNumber: "TEST901",
+        companyId: "homix_living",
+        companyName: "Homix Living Inc.",
+        photoUrl: null,
+        companyAddress: "110 Charlton St, New York, NY 10014",
+        companyWebsite: "https://homixny.com",
+      },
+    };
+    const created = await quickStartCampaign(fixture.listing.id, testActor(), context);
+    expect(created.created).toBe(true);
+    expect(created.campaign.id).not.toBe(fixture.campaign.id);
+    expect(created.campaign.portalOwnerAgentId).toBe(901);
+    const repeated = await quickStartCampaign(fixture.listing.id, testActor(), context);
+    expect(repeated.created).toBe(false);
+    expect(repeated.campaign.id).toBe(created.campaign.id);
+    const preview = await previewCampaign(created.campaign.id);
+    expect(preview.html).toContain("Portal Marketing Agent");
+    expect(preview.html).toContain("portal-agent@example.com");
+    expect(preview.html).toContain("Homix Living Inc.");
+    expect(preview.html).not.toContain(fixture.agent.displayName);
+    expect(
+      (await prisma.listing.findUniqueOrThrow({ where: { id: fixture.listing.id } })).agentId
+    ).toBe(fixture.agent.id);
+    const legacy = await previewCampaign(fixture.campaign.id);
+    expect(legacy.html).toContain(fixture.agent.displayName);
+    expect(legacy.html).not.toContain("Portal Marketing Agent");
+  });
+
   it("uses the Homix listings page when campaign and listing CTA URLs are missing", async () => {
     const fixture = await createRenderableCampaign();
     await prisma.$transaction([

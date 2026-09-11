@@ -42,6 +42,8 @@ jobs:
       USE_MLS_GRID_ACCESS_TOKEN: ${{ vars.USE_MLS_GRID_ACCESS_TOKEN || 'false' }}
       ONEKEY_SYNC_ENABLED: ${{ vars.ONEKEY_SYNC_ENABLED || 'false' }}
       AI_PROVIDER: ${{ vars.AI_PROVIDER || 'disabled' }}
+      USE_HOMIX_PORTAL_INTEGRATION: ${{ vars.USE_HOMIX_PORTAL_INTEGRATION || 'false' }}
+      HOMIX_PORTAL_COMPANIES_JSON: ${{ vars.HOMIX_PORTAL_COMPANIES_JSON || '{}' }}
       USE_OPENAI_API_KEY: ${{ vars.USE_OPENAI_API_KEY || 'false' }}
       OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5-mini' }}
       OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL || 'https://api.openai.com/v1' }}

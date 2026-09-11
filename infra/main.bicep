@@ -47,6 +47,9 @@ param resendWebhookPreviousSecretExpiresAt string = ''
 @secure()
 param unsubscribePreviousSigningSecretExpiresAt string = ''
 param useEntraClientSecret bool = false
+@description('Enable only the request-signed Homix Portal integration. Requires its Key Vault secret and company map.')
+param useHomixPortalIntegration bool = false
+param homixPortalCompaniesJson string = '{}'
 @allowed(['disabled', 'sandbox', 'live'])
 param emailDeliveryMode string = 'disabled'
 @description('Comma-separated normalized recipient addresses allowed while delivery is in sandbox mode.')
@@ -103,14 +106,14 @@ var databaseName = 'homix_marketing'
 var postgresHost = '${postgres.name}.postgres.database.azure.com'
 var postgresRuntimeUrl = 'postgresql://${postgresAdminLogin}:${uriComponent(postgresAdminPassword)}@${postgresHost}:5432/${databaseName}?schema=public&sslmode=require&connection_limit=5&pool_timeout=20'
 var postgresDirectUrl = 'postgresql://${postgresAdminLogin}:${uriComponent(postgresAdminPassword)}@${postgresHost}:5432/${databaseName}?schema=public&sslmode=require&connection_limit=2&pool_timeout=30'
-var publicPaths = [
+var publicPaths = concat([
   '/health/live'
   '/health/ready'
   '/api/public/webhooks/resend'
   '/api/public/unsubscribe/*'
   '/unsubscribe'
   '/public/assets/*'
-]
+], useHomixPortalIntegration ? ['/api/integrations/homix/v1/*'] : [])
 var commonSecrets = concat([
   { name: 'database-url', keyVaultUrl: '${vault.properties.vaultUri}secrets/postgres-runtime-url', identity: identity.id }
   { name: 'direct-database-url', keyVaultUrl: '${vault.properties.vaultUri}secrets/postgres-direct-url', identity: identity.id }
@@ -129,7 +132,7 @@ var commonSecrets = concat([
   { name: 'mls-grid-access-token', keyVaultUrl: '${vault.properties.vaultUri}secrets/mls-grid-access-token', identity: identity.id }
 ] : [], useOpenAiApiKey ? [
   { name: 'openai-api-key', keyVaultUrl: '${vault.properties.vaultUri}secrets/openai-api-key', identity: identity.id }
-] : [], useEntraClientSecret ? [{ name: 'entra-client-secret', keyVaultUrl: '${vault.properties.vaultUri}secrets/entra-client-secret', identity: identity.id }] : [])
+] : [], useHomixPortalIntegration ? [{ name: 'homix-portal-signing', keyVaultUrl: '${vault.properties.vaultUri}secrets/homix-portal-integration-secret', identity: identity.id }] : [], useEntraClientSecret ? [{ name: 'entra-client-secret', keyVaultUrl: '${vault.properties.vaultUri}secrets/entra-client-secret', identity: identity.id }] : [])
 var commonEnv = concat([
   { name: 'NODE_ENV', value: 'production' }
   { name: 'PORT', value: '3000' }
@@ -171,7 +174,7 @@ var commonEnv = concat([
   { name: 'AI_PROVIDER', value: aiProvider }
   { name: 'OPENAI_MODEL', value: openAiModel }
   { name: 'OPENAI_BASE_URL', value: openAiBaseUrl }
-], useResendSecrets ? [{ name: 'RESEND_API_KEY', secretRef: 'resend-api-key' }, { name: 'RESEND_WEBHOOK_SECRET', secretRef: 'resend-webhook-secret' }] : [], usePreviousResendWebhookSecret ? [{ name: 'RESEND_WEBHOOK_PREVIOUS_SECRET', secretRef: 'resend-webhook-previous-secret' }, { name: 'RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT', value: resendWebhookPreviousSecretExpiresAt }] : [], usePreviousUnsubscribeSigningSecret ? [{ name: 'UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET', secretRef: 'unsubscribe-previous-signing-secret' }, { name: 'UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET_EXPIRES_AT', value: unsubscribePreviousSigningSecretExpiresAt }] : [], useBboMarketingApiKey ? [{ name: 'BBO_MARKETING_API_KEY', secretRef: 'bbo-marketing-api-key' }] : [], useMlsGridAccessToken ? [{ name: 'MLS_GRID_ACCESS_TOKEN', secretRef: 'mls-grid-access-token' }] : [], useOpenAiApiKey ? [{ name: 'OPENAI_API_KEY', secretRef: 'openai-api-key' }] : [])
+], useResendSecrets ? [{ name: 'RESEND_API_KEY', secretRef: 'resend-api-key' }, { name: 'RESEND_WEBHOOK_SECRET', secretRef: 'resend-webhook-secret' }] : [], usePreviousResendWebhookSecret ? [{ name: 'RESEND_WEBHOOK_PREVIOUS_SECRET', secretRef: 'resend-webhook-previous-secret' }, { name: 'RESEND_WEBHOOK_PREVIOUS_SECRET_EXPIRES_AT', value: resendWebhookPreviousSecretExpiresAt }] : [], usePreviousUnsubscribeSigningSecret ? [{ name: 'UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET', secretRef: 'unsubscribe-previous-signing-secret' }, { name: 'UNSUBSCRIBE_PREVIOUS_SIGNING_SECRET_EXPIRES_AT', value: unsubscribePreviousSigningSecretExpiresAt }] : [], useBboMarketingApiKey ? [{ name: 'BBO_MARKETING_API_KEY', secretRef: 'bbo-marketing-api-key' }] : [], useMlsGridAccessToken ? [{ name: 'MLS_GRID_ACCESS_TOKEN', secretRef: 'mls-grid-access-token' }] : [], useOpenAiApiKey ? [{ name: 'OPENAI_API_KEY', secretRef: 'openai-api-key' }] : [], useHomixPortalIntegration ? [{ name: 'HOMIX_PORTAL_INTEGRATION_SECRET', secretRef: 'homix-portal-signing' }, { name: 'HOMIX_PORTAL_COMPANIES_JSON', value: homixPortalCompaniesJson }] : [])
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: acrName

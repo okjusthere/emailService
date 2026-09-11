@@ -1,3 +1,8 @@
+import {
+  posterHighlightsJsonSchema,
+  posterHighlightsInstructions,
+  validatePosterHighlights,
+} from "./posterHighlights.js";
 import { z } from "zod";
 import { DomainError } from "../../shared/errors.js";
 import type { AiCopyProvider, AiTone, CampaignCopyProposal, ListingCopyProposal } from "./types.js";
@@ -50,7 +55,8 @@ export class OpenAiCopyProvider implements AiCopyProvider {
   private async generate(
     name: string,
     schema: Record<string, unknown>,
-    prompt: Record<string, unknown>
+    prompt: Record<string, unknown>,
+    instructions: string = baseInstructions
   ): Promise<unknown> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -69,7 +75,7 @@ export class OpenAiCopyProvider implements AiCopyProvider {
           body: JSON.stringify({
             model: this.model,
             store: false,
-            instructions: baseInstructions,
+            instructions,
             input: JSON.stringify(prompt),
             text: { format: { type: "json_schema", name, strict: true, schema } },
           }),
@@ -99,6 +105,16 @@ export class OpenAiCopyProvider implements AiCopyProvider {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  async extractPosterHighlights(facts: Record<string, unknown>) {
+    const result = await this.generate(
+      "poster_highlights",
+      posterHighlightsJsonSchema,
+      facts,
+      posterHighlightsInstructions
+    );
+    return validatePosterHighlights(result, facts);
   }
 
   async generateListing(input: {
