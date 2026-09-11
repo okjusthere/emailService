@@ -483,12 +483,12 @@ export async function testSendCampaign(
     );
   const actorUser = await prisma.user.findUnique({
     where: { id: actor.userId },
-    select: { emailNormalized: true, displayName: true },
+    select: { email: true, displayName: true },
   });
   if (!actorUser)
     throw new DomainError("TEST_RECIPIENT_UNAVAILABLE", "Your test email is unavailable.", 403);
   const email = normalizeEmail(emailInput);
-  if (email !== actorUser.emailNormalized)
+  if (email !== normalizeEmail(actorUser.email))
     throw new DomainError(
       "TEST_RECIPIENT_MUST_BE_SELF",
       "Test emails can only be sent to the signed-in user.",

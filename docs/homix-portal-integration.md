@@ -37,13 +37,9 @@ Company map verified against Portal licensed-company definitions and deployed:
 
 Bearer JWT uses HS256, issuer `homixliving`, audience `email-service`, and expiry at most 90 seconds. Claims bind the method, exact original URL including query, and SHA-256 of the canonical JSON body (GET uses an empty string). Claims also bind `sub` to `brand.agentId` and email to the brand email. All write requests include a version or a stable client request ID as required below.
 
-The receiver resolves `User.portalAgentId`. If the email belongs to an unlinked legacy account, it returns `PORTAL_LINK_REQUIRED`; it never merges accounts based only on matching email. For an intentional link, verify the person and numeric Agent ID in the Portal, then run the dry-run administrative command with exact IDs:
+The receiver provisions an internal principal on first signed request, identified only by User.portalAgentId. User.email remains the signed contact email; emailNormalized stores the non-email namespace key portal-agent:<id>. Native account lookup cannot collide with that key. Two Portal Agents may share a contact email without sharing ownership, and email changes retain the same internal ID. Disabled Portal principals remain blocked. Native authentication rejects Portal-managed principals.
 
-```bash
-node --import tsx scripts/link-homix-portal-user.ts --portal-agent-id 123 --user-id UUID --expected-email agent@example.com --actor-user-id ADMIN_UUID
-```
-
-Only after reviewing the mapping, repeat with `--apply`. The script checks an active admin actor, active target, matching email, uniqueness, concurrent changes, and writes an audit record. It does not transfer legacy campaigns or modify the listing agent.
+A same-email native administrator remains separate with its original role and login. If an older manual mapping points at a native administrator or Entra identity, the receiver detaches that mapping and creates a Portal principal while preserving the native account and historical foreign keys. Campaign access still uses Portal ownership. The legacy link-homix-portal-user script is not part of the supported onboarding flow and must not be used for new Portal users. No registration or manual association is required.
 
 All campaign operations scope by application and owner, or by application for a Portal administrator. Cross-owner IDs return 404. Global contact exports and unrelated Email Service campaigns are not exposed.
 
@@ -95,3 +91,7 @@ Prior web/worker image for rollback: `acrhomixmktg4flyitmde.azurecr.io/homix-mar
 The final acceptance fix casts Prisma's numeric Portal Agent parameter to `integer` for PostgreSQL's two-argument advisory lock. Real PostgreSQL route regression tests cover concurrent provisioning and disabled mapped users (2 passed). Current web/worker digest: `sha256:ceb4c27271a8c45f15bddb7119c6a587a71efe958319e1418d3c32a753236ba5`, ACR run `cjf` succeeded. Ready revisions: web `--0000020`, worker `--0000018`. Migration still uses the original migration image; no further schema change was needed.
 
 Latest extraction release: ACR run cjh succeeded with image sha256:7417eb2091164725ac2518f3bd85cc7152c167c0547beb69883a786e8663ca7d (tag homix-poster-highlights-20260911). Both web and worker now use this immutable image with existing configuration preserved. Ready revisions are web --0000021 and worker --0000019. Real signed UI extraction succeeded from the Portal and returned source-linked English/Chinese points plus annual tax and monthly management fee. No additional database migration is required. This supersedes the earlier cjf release; its digest above remains the immediate rollback image.
+
+## Independent Content Studio services
+
+The Portal now queries the official website's private listing API (the same BBO provider as Share Center) and calls its own configured Azure text deployment for poster selling-point extraction. These flows do not call this service. Existing listing and poster-highlights endpoints remain for compatibility; all remain signed. This release changes no database schema, EasyAuth exceptions, sender configuration or delivery settings. Self-test validation compares the actual contact email, not the internal principal namespace key.

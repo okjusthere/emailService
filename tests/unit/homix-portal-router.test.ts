@@ -149,18 +149,27 @@ describe("Portal receiver ownership boundary", () => {
       expect.objectContaining({ where: { sourceApplication: "homixliving" } })
     );
   });
-  it("never silently links a legacy account by email", async () => {
+  it("provisions an isolated Portal principal even when a native account has the same email", async () => {
     fake.userFind.mockImplementation(async ({ where }) =>
-      where.portalAgentId ? null : { id: "legacy-user" }
+      where.portalAgentId ? null : { id: "legacy-admin", role: "ADMIN" }
     );
+    fake.userCreate.mockImplementation(async ({ data }) => ({ id: "portal-user", ...data }));
     const path = "/campaigns";
-    const response = await request(app)
+    await request(app)
       .get(prefix + path)
       .set("Authorization", `Bearer ${token("GET", path, undefined)}`)
-      .expect(409);
-    expect(response.body.error.code).toBe("PORTAL_LINK_REQUIRED");
-    expect(fake.userCreate).not.toHaveBeenCalled();
-    expect(fake.findMany).not.toHaveBeenCalled();
+      .expect(200);
+    expect(fake.userCreate).toHaveBeenCalledWith({
+      data: {
+        portalAgentId: 42,
+        email: brand.email,
+        emailNormalized: "portal-agent:42",
+        displayName: brand.name,
+        role: "MARKETER",
+      },
+    });
+    expect(fake.userFind).toHaveBeenCalledTimes(1);
+    expect(fake.userUpdate).not.toHaveBeenCalled();
   });
   it("rejects disabled mapped users before accessing campaigns", async () => {
     fake.userFind.mockResolvedValue({ id: "mapped-user", isActive: false });

@@ -12,6 +12,9 @@ export async function resolveLocalUser(emailInput: string) {
   const email = normalizeEmail(emailInput);
   if (email !== config.localAdminEmail)
     throw new DomainError("ACCESS_DENIED", "This local account is not configured.", 403);
+  const existing = await prisma.user.findUnique({ where: { emailNormalized: email } });
+  if (existing?.portalAgentId != null)
+    throw new DomainError("PORTAL_ONLY", "Use the Homix Portal to access this service.", 403);
   return prisma.user.upsert({
     where: { emailNormalized: email },
     create: {
@@ -30,6 +33,8 @@ export async function resolveAzureUser(identity: EasyAuthIdentity) {
   return inTransaction(async (tx) => {
     const byObjectId = await tx.user.findUnique({ where: { entraObjectId: identity.objectId } });
     if (byObjectId) {
+      if (byObjectId.portalAgentId != null)
+        throw new DomainError("PORTAL_ONLY", "Use the Homix Portal to access this service.", 403);
       if (!byObjectId.isActive)
         throw new DomainError("USER_DISABLED", "This account is disabled.", 403);
       const emailOwner = await tx.user.findUnique({ where: { emailNormalized: email } });
@@ -52,6 +57,8 @@ export async function resolveAzureUser(identity: EasyAuthIdentity) {
 
     const byEmail = await tx.user.findUnique({ where: { emailNormalized: email } });
     if (byEmail) {
+      if (byEmail.portalAgentId != null)
+        throw new DomainError("PORTAL_ONLY", "Use the Homix Portal to access this service.", 403);
       if (!byEmail.isActive)
         throw new DomainError("USER_DISABLED", "This account is disabled.", 403);
       if (byEmail.entraObjectId)

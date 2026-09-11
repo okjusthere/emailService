@@ -5,8 +5,8 @@ import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import { prisma } from "../../db/prisma.js";
 import { config } from "../../config/index.js";
-import { DomainError } from "../../shared/errors.js";
 import { normalizeEmail } from "../../shared/normalize.js";
+import { DomainError } from "../../shared/errors.js";
 import { actorFromRequest } from "../middleware/actor.js";
 import {
   verifyPortalToken,
@@ -55,19 +55,20 @@ homixRouter.use(async (req, res, next) => {
       path: req.originalUrl,
       body: req.method === "GET" ? "" : JSON.stringify(req.body),
     });
-    const emailNormalized = normalizeEmail(claims.email);
+    // Internal principal key, deliberately outside the native login email namespace.
+    // Contact email remains in user.email and the signed campaign brand snapshot.
+    const emailNormalized = `portal-agent:${claims.brand.agentId}`;
     const user = await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(891011, ${claims.brand.agentId}::integer)`;
-      const existing = await tx.user.findUnique({ where: { portalAgentId: claims.brand.agentId } });
+      let existing = await tx.user.findUnique({ where: { portalAgentId: claims.brand.agentId } });
       if (existing && !existing.isActive)
         throw new DomainError("USER_DISABLED", "Your Email Service account is disabled.", 403);
-      const emailOwner = await tx.user.findUnique({ where: { emailNormalized } });
-      if (emailOwner && emailOwner.id !== existing?.id)
-        throw new DomainError(
-          "PORTAL_LINK_REQUIRED",
-          "An administrator must link the existing Email Service account to this Portal Agent ID.",
-          409
-        );
+      // Older manual mappings may point at a native administrator. Detach only
+      // that mapping; preserve its login, role and historical foreign keys.
+      if (existing && (existing.entraObjectId || existing.role === "ADMIN")) {
+        await tx.user.update({ where: { id: existing.id }, data: { portalAgentId: null } });
+        existing = null;
+      }
       return existing
         ? tx.user.update({
             where: { id: existing.id },
