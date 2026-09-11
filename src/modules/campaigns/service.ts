@@ -184,6 +184,7 @@ export async function listCampaigns(query: unknown) {
     })
     .parse(query);
   const where: Prisma.CampaignWhereInput = {
+    deletedAt: null,
     ...(page.search ? { name: { contains: page.search, mode: "insensitive" } } : {}),
     ...(page.status ? { status: page.status } : {}),
     ...(page.listingId ? { listingId: page.listingId } : {}),
@@ -381,7 +382,8 @@ export async function updateCampaign(
       where: { id },
       include: { listing: { select: { agentId: true } } },
     });
-    if (!before) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
+    if (!before || before.deletedAt)
+      throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
     if (!isCampaignEditable(before.status))
       throw new DomainError(
         "CAMPAIGN_LOCKED",
@@ -446,7 +448,8 @@ export async function markCampaignReady(id: string, actor: ActorContext) {
       SELECT id FROM campaigns WHERE id = ${id}::uuid FOR UPDATE
     `;
     const campaign = await tx.campaign.findUnique({ where: { id } });
-    if (!campaign) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
+    if (!campaign || campaign.deletedAt)
+      throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
     assertCampaignTransition(campaign.status, CampaignStatus.READY);
     const updated = await tx.campaign.update({ where: { id }, data: { status: "READY" } });
     await writeAudit(tx, actor, { action: "campaign.ready", entityType: "campaign", entityId: id });
@@ -459,7 +462,8 @@ export async function previewCampaign(
   recipient: { firstName?: string; fullName?: string; company?: string } = {}
 ) {
   const campaign = await campaignForRendering(id);
-  if (!campaign) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
+  if (!campaign || campaign.deletedAt)
+    throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
   const snapshot = snapshotFromCampaign(campaign);
   return renderListingEmail({
     snapshot,
@@ -501,7 +505,7 @@ export async function testSendCampaign(
       403
     );
   const campaign = await campaignForRendering(id);
-  if (!campaign || campaign.version !== version)
+  if (!campaign || campaign.deletedAt || campaign.version !== version)
     throw new DomainError(
       "CAMPAIGN_VERSION_CONFLICT",
       "Test send must use the current campaign version.",
@@ -595,7 +599,8 @@ export async function snapshotCampaign(
       const uniqueKey = `DISPATCH_CAMPAIGN/${id}/${keySuffix}`;
       await tx.$queryRaw`SELECT id FROM campaigns WHERE id = ${id}::uuid FOR UPDATE`;
       const campaign = await campaignForRendering(id, tx);
-      if (!campaign) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
+      if (!campaign || campaign.deletedAt)
+        throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
       if (campaign.version !== expectedVersion)
         throw new DomainError(
           "CAMPAIGN_VERSION_CONFLICT",
@@ -763,7 +768,8 @@ export async function queueCampaignSnapshot(
   return inTransaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM campaigns WHERE id = ${id}::uuid FOR UPDATE`;
     const campaign = await campaignForRendering(id, tx);
-    if (!campaign) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
+    if (!campaign || campaign.deletedAt)
+      throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
     if (campaign.version !== expectedVersion)
       throw new DomainError(
         "CAMPAIGN_VERSION_CONFLICT",
@@ -842,7 +848,8 @@ export async function publishCampaign(
   return inTransaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM campaigns WHERE id = ${id}::uuid FOR UPDATE`;
     let campaign = await campaignForRendering(id, tx);
-    if (!campaign) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
+    if (!campaign || campaign.deletedAt)
+      throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
     const priorJob = await tx.job.findUnique({ where: { uniqueKey } });
     if (
       priorJob &&
@@ -888,7 +895,8 @@ export async function publishCampaign(
         after: { campaignId: id },
       });
       campaign = await campaignForRendering(id, tx);
-      if (!campaign) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
+      if (!campaign || campaign.deletedAt)
+        throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
     }
     const audienceFilter = audienceFilterSchema.parse(campaign.audienceFilter);
     const audienceContacts = await resolveAudienceContacts(tx, audienceFilter);
@@ -992,7 +1000,8 @@ export async function transitionCampaign(
       SELECT id FROM campaigns WHERE id = ${id}::uuid FOR UPDATE
     `);
     const campaign = await tx.campaign.findUnique({ where: { id } });
-    if (!campaign) throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
+    if (!campaign || campaign.deletedAt)
+      throw new DomainError("CAMPAIGN_NOT_FOUND", "Campaign not found.", 404);
     assertCampaignTransition(campaign.status, target);
     const updated = await tx.campaign.update({ where: { id }, data: { status: target } });
     if (target === CampaignStatus.CANCELLED) {

@@ -3,6 +3,7 @@ import { listingCosts } from "../../integrations/onekey/listingCosts.js";
 import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
+import { writeAudit } from "../../modules/audit/service.js";
 import { prisma } from "../../db/prisma.js";
 import { config } from "../../config/index.js";
 import { normalizeEmail } from "../../shared/normalize.js";
@@ -117,6 +118,7 @@ const costlyLimit = rateLimit({
 function scope(claims: PortalClaims) {
   return {
     sourceApplication: "homixliving",
+    deletedAt: null,
     ...(claims.admin ? {} : { portalOwnerAgentId: claims.brand.agentId }),
   };
 }
@@ -151,6 +153,12 @@ function dto(c: CampaignRecord) {
       name: campaignPortalIdentity(c)?.companyName ?? c.senderProfile.fromName,
       email: c.senderProfile.fromEmail,
       dailyLimit: c.senderProfile.dailyLimit,
+      batchSize: c.senderProfile.batchSize,
+      minBatchIntervalSeconds: c.senderProfile.minBatchIntervalSeconds,
+      timezone: c.senderProfile.timezone,
+      sendWindowStart: c.senderProfile.sendWindowStart,
+      sendWindowEnd: c.senderProfile.sendWindowEnd,
+      allowedWeekdays: c.senderProfile.allowedWeekdays,
       nextBatchAt: c.senderProfile.nextBatchAt,
     },
     listing: c.listing
@@ -391,6 +399,33 @@ homixRouter.post("/campaigns/:id/nearby", costlyLimit, async (req, res) => {
     summary: result.summary,
     zipScope: result.selection.zipScope,
   });
+});
+// Retain test/audit history while removing the draft from the Portal workspace.
+// Atomic status + version predicate prevents deleting a concurrently published draft.
+homixRouter.delete("/campaigns/:id", async (req, res) => {
+  const claims = res.locals.portal as PortalClaims;
+  const id = z.uuid().parse(req.params.id);
+  const { version } = z.object({ version: versionSchema }).strict().parse(req.body);
+  await prisma.$transaction(async (tx) => {
+    const result = await tx.campaign.updateMany({
+      where: { id, ...scope(claims), status: "DRAFT", version },
+      data: { deletedAt: new Date(), version: { increment: 1 }, updatedByUserId: req.user!.id },
+    });
+    if (result.count !== 1)
+      throw new DomainError(
+        "DRAFT_DELETE_CONFLICT",
+        "Only an unchanged draft can be deleted. Refresh the campaign and try again / 只能删除未发生变更的草稿，请刷新活动后重试。",
+        409
+      );
+    await writeAudit(tx, actorFromRequest(req), {
+      action: "campaign.delete_draft",
+      entityType: "campaign",
+      entityId: id,
+      before: { version },
+      after: { deleted: true },
+    });
+  });
+  res.json({ deleted: true, id });
 });
 homixRouter.post("/campaigns/:id/preview", async (req, res) => {
   const c = await owned(String(req.params.id), res.locals.portal);

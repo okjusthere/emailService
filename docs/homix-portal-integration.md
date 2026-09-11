@@ -95,3 +95,11 @@ Latest extraction release: ACR run cjh succeeded with image sha256:7417eb2091164
 ## Independent Content Studio services
 
 The Portal now queries the official website's private listing API (the same BBO provider as Share Center) and calls its own configured Azure text deployment for poster selling-point extraction. These flows do not call this service. Existing listing and poster-highlights endpoints remain for compatibility; all remain signed. This release changes no database schema, EasyAuth exceptions, sender configuration or delivery settings. Self-test validation compares the actual contact email, not the internal principal namespace key.
+
+## Draft deletion and sender visibility (2026-09-11)
+
+`DELETE /campaigns/:id` accepts `{ version }` with the existing HMAC signature and Portal ownership scope. Only an unchanged DRAFT can be deleted. An atomic status/version predicate prevents racing publication; a tombstone preserves test records and audit history. Deleted drafts are excluded from Portal and native lists and rejected by campaign mutation/rendering services. Apply migration `20260911040000_portal_draft_delete` before rolling out the receiver.
+
+Campaign DTO sender fields now include `batchSize`, `minBatchIntervalSeconds`, `timezone`, `sendWindowStart`, `sendWindowEnd`, and `allowedWeekdays`. The existing sender-level global pacing, warmup and daily quotas remain authoritative; this release does not change actual sending limits.
+
+Validation: 81 unit tests pass. Fresh PostgreSQL integration: 47 sandbox cases pass; the durable disabled-delivery wake-up case passes separately with TEST_DELIVERY_MODE=disabled. Portal browser previews require the exact marketing-assets Azure Blob origin in its image CSP.

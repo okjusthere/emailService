@@ -4,6 +4,8 @@ import express from "express";
 import request from "supertest";
 const fake = vi.hoisted(() => ({
   findFirst: vi.fn(),
+  deleteDraft: vi.fn(),
+  audit: vi.fn(),
   findMany: vi.fn(),
   userFind: vi.fn(),
   userUpdate: vi.fn(),
@@ -18,6 +20,7 @@ vi.mock("../../src/db/prisma.js", () => {
   const tx = {
     user: { findUnique: fake.userFind, update: fake.userUpdate, create: fake.userCreate },
     $executeRaw: fake.execute,
+    campaign: { updateMany: fake.deleteDraft },
   };
   return {
     prisma: {
@@ -27,6 +30,7 @@ vi.mock("../../src/db/prisma.js", () => {
     },
   };
 });
+vi.mock("../../src/modules/audit/service.js", () => ({ writeAudit: fake.audit }));
 vi.mock("../../src/modules/campaigns/service.js", () => ({
   quickStartCampaign: vi.fn(),
   updateCampaign: vi.fn(),
@@ -114,7 +118,7 @@ describe("Portal receiver ownership boundary", () => {
       .expect(404);
     expect(fake.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id, sourceApplication: "homixliving", portalOwnerAgentId: 42 },
+        where: { id, sourceApplication: "homixliving", deletedAt: null, portalOwnerAgentId: 42 },
       })
     );
   });
@@ -130,7 +134,7 @@ describe("Portal receiver ownership boundary", () => {
         .expect(404);
       expect(fake.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id, sourceApplication: "homixliving", portalOwnerAgentId: 42 },
+          where: { id, sourceApplication: "homixliving", deletedAt: null, portalOwnerAgentId: 42 },
         })
       );
       expect(fake.preview).not.toHaveBeenCalled();
@@ -146,7 +150,7 @@ describe("Portal receiver ownership boundary", () => {
       .set("Authorization", `Bearer ${token("GET", path, undefined, true)}`)
       .expect(200);
     expect(fake.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { sourceApplication: "homixliving" } })
+      expect.objectContaining({ where: { sourceApplication: "homixliving", deletedAt: null } })
     );
   });
   it("provisions an isolated Portal principal even when a native account has the same email", async () => {
@@ -179,5 +183,50 @@ describe("Portal receiver ownership boundary", () => {
       .set("Authorization", `Bearer ${token("GET", path, undefined)}`)
       .expect(403);
     expect(fake.findMany).not.toHaveBeenCalled();
+  });
+  it("deletes only the owned, unchanged draft and keeps an audit record", async () => {
+    fake.deleteDraft.mockResolvedValue({ count: 1 });
+    const path = `/campaigns/${id}`,
+      body = { version: 3 };
+    await request(app)
+      .delete(prefix + path)
+      .set("Authorization", `Bearer ${token("DELETE", path, body)}`)
+      .send(body)
+      .expect(200);
+    expect(fake.deleteDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id,
+          sourceApplication: "homixliving",
+          deletedAt: null,
+          portalOwnerAgentId: 42,
+          status: "DRAFT",
+          version: 3,
+        },
+      })
+    );
+    expect(fake.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ action: "campaign.delete_draft", entityId: id })
+    );
+  });
+  it("rejects foreign, published, deleted or changed drafts without an audit mutation", async () => {
+    fake.deleteDraft.mockResolvedValue({ count: 0 });
+    const path = `/campaigns/${id}`,
+      body = { version: 3 };
+    await request(app)
+      .delete(prefix + path)
+      .set("Authorization", `Bearer ${token("DELETE", path, body)}`)
+      .send(body)
+      .expect(409);
+    expect(fake.audit).not.toHaveBeenCalled();
+  });
+  it("rejects unsigned deletion", async () => {
+    await request(app)
+      .delete(prefix + `/campaigns/${id}`)
+      .send({ version: 3 })
+      .expect(401);
+    expect(fake.deleteDraft).not.toHaveBeenCalled();
   });
 });

@@ -1633,6 +1633,7 @@ router.get("/dashboard/summary", async (_req, res) => {
 router.get("/dashboard/recent-campaigns", async (_req, res) => {
   res.json({
     items: await prisma.campaign.findMany({
+      where: { deletedAt: null },
       orderBy: { updatedAt: "desc" },
       take: 10,
       include: { listing: { select: { title: true } } },

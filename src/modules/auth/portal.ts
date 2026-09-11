@@ -23,7 +23,7 @@ const claimsSchema = z.object({
   admin: z.boolean(),
   email: z.email(),
   brand: portalBrandSchema,
-  method: z.enum(["GET", "POST", "PATCH"]),
+  method: z.enum(["GET", "POST", "PATCH", "DELETE"]),
   path: z.string(),
   bodyHash: z.string().regex(/^[a-f0-9]{64}$/),
 });

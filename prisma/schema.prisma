@@ -609,6 +609,7 @@ model SavedAudience {
 }
 
 model Campaign {
+  deletedAt               DateTime?           @map("deleted_at") @db.Timestamptz(3)
   sourceApplication       String?             @map("source_application")
   portalOwnerAgentId      Int?                @map("portal_owner_agent_id")
   portalRequestKey        String?             @map("portal_request_key")
