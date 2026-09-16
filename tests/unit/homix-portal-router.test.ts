@@ -1,4 +1,4 @@
-import { beforeEach, describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
@@ -50,6 +50,13 @@ vi.mock("../../src/modules/ai/service.js", () => ({
 }));
 import { homixRouter } from "../../src/web/routes/homix.js";
 import { errorHandler } from "../../src/shared/errors.js";
+import { config } from "../../src/config/index.js";
+const mutableConfig = config as {
+  deliveryMode: "disabled" | "sandbox" | "live";
+  testAllowlist: string[];
+};
+const originalMode = mutableConfig.deliveryMode;
+const originalAllowlist = mutableConfig.testAllowlist;
 const secret = "router-test-signing-key-at-least-32-characters",
   id = "f717651f-27b6-439d-a250-b0057caf63fb";
 const prefix = "/api/integrations/homix/v1";
@@ -96,6 +103,17 @@ describe("Portal receiver ownership boundary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.HOMIX_PORTAL_INTEGRATION_SECRET = secret;
+    vi.stubEnv(
+      "HOMIX_PORTAL_COMPANIES_JSON",
+      JSON.stringify({
+        homix_realty: {
+          senderProfileId: id,
+          companyName: "Homix Realty",
+          companyAddress: "123 Main Street",
+          companyWebsite: "https://example.com",
+        },
+      })
+    );
     const user = {
       id: "mapped-user",
       portalAgentId: 42,
@@ -110,6 +128,75 @@ describe("Portal receiver ownership boundary", () => {
     fake.findFirst.mockResolvedValue(null);
     fake.findMany.mockResolvedValue([]);
   });
+  afterEach(() => {
+    mutableConfig.deliveryMode = originalMode;
+    mutableConfig.testAllowlist = originalAllowlist;
+    vi.unstubAllEnvs();
+  });
+  it.each([
+    { mode: "live", allowlist: [], allowed: true },
+    { mode: "sandbox", allowlist: [], allowed: false },
+    { mode: "sandbox", allowlist: [brand.email], allowed: true },
+    { mode: "disabled", allowlist: [], allowed: false },
+    { mode: "disabled", allowlist: [brand.email], allowed: false },
+  ] as const)(
+    "reports self-test eligibility for $mode and $allowlist",
+    async ({ mode, allowlist, allowed }) => {
+      mutableConfig.deliveryMode = mode;
+      mutableConfig.testAllowlist = [...allowlist];
+      const response = await request(app)
+        .get(prefix + "/status")
+        .set("Authorization", `Bearer ${token("GET", "/status", undefined)}`)
+        .expect(200);
+      expect(response.body).toMatchObject({ email: brand.email, selfTestAllowed: allowed });
+    }
+  );
+  it("takes the test recipient from the signed identity", async () => {
+    fake.findFirst.mockResolvedValue({
+      id,
+      version: 3,
+      sourceApplication: "homixliving",
+      portalOwnerAgentId: 42,
+      marketingIdentity: {
+        ...brand,
+        companyAddress: "123 Main Street",
+        companyWebsite: "https://example.com",
+      },
+      senderProfile: { fromEmail: "listings@example.com" },
+    });
+    const path = `/campaigns/${id}/test`;
+    const body = { version: 3, clientRequestId: "self-test-request" };
+    await request(app)
+      .post(prefix + path)
+      .set("Authorization", `Bearer ${token("POST", path, body)}`)
+      .send(body)
+      .expect(200);
+    expect(fake.testSend).toHaveBeenCalledWith(
+      id,
+      brand.email,
+      3,
+      body.clientRequestId,
+      expect.objectContaining({ userId: "mapped-user" })
+    );
+  });
+  it.each(["email", "to", "recipient"])(
+    "rejects a client-supplied %s for self-tests",
+    async (field) => {
+      fake.findFirst.mockResolvedValue({ id, version: 3 });
+      const path = `/campaigns/${id}/test`;
+      const body = {
+        version: 3,
+        clientRequestId: "self-test-request",
+        [field]: "other@example.com",
+      };
+      await request(app)
+        .post(prefix + path)
+        .set("Authorization", `Bearer ${token("POST", path, body)}`)
+        .send(body)
+        .expect(400);
+      expect(fake.testSend).not.toHaveBeenCalled();
+    }
+  );
   it("does not expose legacy or another Agent's campaign", async () => {
     const path = `/campaigns/${id}`;
     await request(app)

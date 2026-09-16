@@ -498,7 +498,8 @@ export async function testSendCampaign(
       "Test emails can only be sent to the signed-in user.",
       403
     );
-  if (!config.testAllowlist.includes(email))
+  // Live users can always test to their own account; sandbox delivery stays restricted.
+  if (config.deliveryMode === "sandbox" && !config.testAllowlist.includes(email))
     throw new DomainError(
       "TEST_RECIPIENT_NOT_ALLOWED",
       "Test recipient is not in EMAIL_TEST_ALLOWLIST.",

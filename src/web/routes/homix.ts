@@ -226,7 +226,10 @@ homixRouter.get("/status", (_req, res) => {
     email: claims.email,
     brand: context.marketingIdentity,
     deliveryMode: config.deliveryMode,
-    selfTestAllowed: config.testAllowlist.includes(normalizeEmail(claims.email)),
+    selfTestAllowed:
+      config.deliveryMode === "live" ||
+      (config.deliveryMode === "sandbox" &&
+        config.testAllowlist.includes(normalizeEmail(claims.email))),
   });
 });
 homixRouter.get("/listings", async (req, res) => {
