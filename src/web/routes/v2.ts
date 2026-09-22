@@ -1140,7 +1140,7 @@ const senderSchema = z.object({
   fromEmail: z.email(),
   domain: z.string().min(3),
   fixedReplyToEmail: z.email().nullable().optional(),
-  dailyLimit: z.number().int().positive(),
+  dailyLimit: z.number().int().positive().nullable(),
   batchSize: z.number().int().min(1).max(100),
   minBatchIntervalSeconds: z.number().int().min(1),
   timezone: z.string(),

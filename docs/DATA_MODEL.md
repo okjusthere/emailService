@@ -28,7 +28,7 @@ An ACTIVE listing requires a usable URL and hero image. Archiving database recor
 ## Audience and campaign aggregate
 
 - `saved_audiences`: versioned, validated JSON DSL, estimated count and audit ownership. The compiler accepts only enumerated fields/operators and Prisma query fragments—never arbitrary SQL.
-- `sender_profiles`: stable From identity, reply policy, timezone/window/weekdays, daily/batch limits, warm-up schedule, tracking preferences, verification/readiness and default profile. `next_batch_at` is the durable sender-wide lease boundary shared by every Campaign and safe retry.
+- `sender_profiles`: stable From identity, reply policy, timezone/window/weekdays, daily/batch limits, warm-up schedule, tracking preferences, verification/readiness and default profile. `daily_limit = NULL` means no daily quota; positive limits and optional warm-up remain supported. Daily usage still records reservations and accepted messages when the quota is unlimited. `next_batch_at` is the durable sender-wide lease boundary shared by every Campaign and safe retry.
 - `campaigns`: listing/audience/sender/template selection, editable content, optimistic `version`, state machine, scheduled/started/completed timestamps, frozen `content_snapshot`, aggregate counters and test-send evidence. The legacy `reply_to_agent_id` is kept for compatibility but is always synchronized to the listing's assigned Agent; rendered identity and provider Reply-To never use a different Campaign/global Agent.
 - `campaign_recipients`: immutable recipient/name/company snapshot, eligibility/suppression reason, independent `send_state`, `delivery_state`, engagement timestamps, provider ID and signed-unsubscribe-token hash.
 

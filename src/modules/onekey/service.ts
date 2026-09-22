@@ -12,7 +12,7 @@ import {
   type OneKeyListingAgent,
 } from "../../integrations/onekey/index.js";
 import { isAllowedOneKeyMediaUrl } from "../../integrations/onekey/mediaPolicy.js";
-import { normalizeAddress } from "../../integrations/onekey/normalize.js";
+import { coListingFields, normalizeAddress } from "../../integrations/onekey/normalize.js";
 import { DomainError } from "../../shared/errors.js";
 import { normalizeEmail } from "../../shared/normalize.js";
 import { createAssetStorage } from "../../storage/index.js";
@@ -23,6 +23,7 @@ function json(value: unknown): Prisma.InputJsonValue {
 
 function sourceFacts(item: OneKeyListing) {
   return {
+    ...coListingFields(item),
     listingKey: item.sourceKey,
     listingId: item.listingId,
     standardStatus: item.standardStatus,
@@ -102,6 +103,7 @@ export async function cacheOneKeyListing(item: OneKeyListing) {
 
 function indexedToListing(item: Awaited<ReturnType<typeof cacheOneKeyListing>>): OneKeyListing {
   return {
+    ...coListingFields(item.sourceSnapshot),
     sourceKey: item.sourceKey,
     listingId: item.listingId ?? undefined,
     standardStatus: item.standardStatus ?? undefined,
@@ -153,7 +155,11 @@ export async function searchOneKeyListings(queryInput: string, limit = 20) {
   });
   const importedByKey = new Map(imported.map((item) => [item.sourceKey, item.id]));
   return {
-    items: items.map((item) => ({ ...item, importedListingId: importedByKey.get(item.sourceKey) })),
+    items: items.map((item) => ({
+      ...item,
+      ...coListingFields(item.sourceSnapshot),
+      importedListingId: importedByKey.get(item.sourceKey),
+    })),
     source: providerUsed ? "local+provider" : "local",
   };
 }

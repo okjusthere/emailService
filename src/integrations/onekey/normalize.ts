@@ -19,6 +19,12 @@ const listingSchema = z
     livingArea: z.number().nonnegative().optional(),
     yearBuilt: z.number().int().min(1600).max(2200).optional(),
     publicRemarks: z.string().max(50_000).optional(),
+    coListAgentKey: z.string().optional(),
+    coListAgentMlsId: z.string().optional(),
+    coListAgentFullName: z.string().optional(),
+    coListOfficeKey: z.string().optional(),
+    coListOfficeMlsId: z.string().optional(),
+    coListOfficeName: z.string().optional(),
     listAgentFullName: z.string().optional(),
     listOfficeName: z.string().optional(),
     modificationTimestamp: z.string().optional(),
@@ -51,6 +57,12 @@ export function normalizeOneKeyListing(value: unknown): OneKeyListing {
     livingArea: item.livingArea,
     yearBuilt: item.yearBuilt,
     publicRemarks: item.publicRemarks,
+    coListAgentKey: item.coListAgentKey,
+    coListAgentMlsId: item.coListAgentMlsId,
+    coListAgentFullName: item.coListAgentFullName,
+    coListOfficeKey: item.coListOfficeKey,
+    coListOfficeMlsId: item.coListOfficeMlsId,
+    coListOfficeName: item.coListOfficeName,
     listAgentFullName: item.listAgentFullName,
     listOfficeName: item.listOfficeName,
     modificationTimestamp: item.modificationTimestamp,
@@ -69,4 +81,18 @@ export function normalizeAddress(value: string): string {
     .replace(/\b(road|rd)\b/g, "rd")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+}
+
+const coListingFieldsSchema = z.object({
+  coListAgentKey: z.string().optional(),
+  coListAgentMlsId: z.string().optional(),
+  coListAgentFullName: z.string().optional(),
+  coListOfficeKey: z.string().optional(),
+  coListOfficeMlsId: z.string().optional(),
+  coListOfficeName: z.string().optional(),
+});
+/** Restore the same typed facts from the existing JSON snapshot on cache hits. */
+export function coListingFields(value: unknown) {
+  const result = coListingFieldsSchema.safeParse(value);
+  return result.success ? result.data : {};
 }

@@ -26,7 +26,9 @@ The `RECOVERY_GUARD` is checked independently of `GLOBAL_SEND_PAUSED`, so direct
 
 ## Gradual delivery policy
 
-The Homix Listings sender is intentionally configured for sparse delivery, not provider throughput: one recipient per batch, at least 300 seconds between provider submissions, weekdays 09:30–16:30 in `America/New_York`, and no more than 80 accepted recipients per local day. Warm-up begins at 30/day, remains 30 on day 2, increases to 50/day on days 3–4, and reaches 80/day on day 5. The Composer confirmation estimates completion from these persisted sender fields.
+The Homix Listings sender uses one recipient per batch, at least 60 seconds between provider submissions, and a daily 08:00–18:00 window in `America/New_York`, including weekends. There is no daily quota (`dailyLimit: null`) and warm-up is disabled. The end of the window is exclusive: delivery stops at 18:00 and resumes at 08:00 the next day. The full window has a theoretical capacity of 600 messages, with actual throughput reduced by processing time, retries, or other delivery gates. Portal and native Campaigns share the same sender policy. The Composer confirmation estimates completion from these persisted sender fields.
+
+Nullable daily quotas retain daily reservation and acceptance accounting. Positive daily limits and explicitly enabled warm-up schedules remain available for other sender policies. The schema migration only changes defaults and enables null; existing sender rows require an audited policy update after Web and Worker both run the compatible release.
 
 `sender_profiles.next_batch_at` is claimed in a serializable transaction before both initial batches and safe retries. It is shared across every Campaign using that sender, so adding Campaigns or workers does not multiply the send rate. Do not clear it to speed delivery. To change pacing, pause sending first, review active/queued batches and deliverability, update the sender policy through the authenticated API/UI, and resume with an audit reason. Daily quota, send window, global pause, recovery guard, suppression and deliverability thresholds remain independent gates.
 

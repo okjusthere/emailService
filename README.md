@@ -45,7 +45,7 @@ OneKey 与 AI 同样默认禁用，不需要外部凭据即可启动。开发验
 3. 收件人准备完成后，AI 生产配置可用时会自动写一次初稿并提供三个主题方案与改写风格；否则保留安全的人工起始文案。Subject、preview text、正文、CTA 都可直接编辑并自动保存。
 4. 在右侧 Desktop/Mobile 预览确认完整房源和 Listing Agent 落款，然后点击显示当前登录邮箱的 **Send test to …**。测试只发给当前登录用户；邮件签名和 Reply-To 仍属于 Listing Agent。
 5. 测试成功后点击 **Review & send**，选择立即或定时发送并确认。确认页会显示全局发送节奏、每日上限和预计完成天数；服务端随后原子验证版本并创建不可变内容/收件人快照。
-6. 正式发送由所有 Campaign 共用的发送人级闸门控制：默认工作日 09:30–16:30（America/New_York），每 5 分钟 1 封、每天最多 80 封，并按 30/30/50/50/80 的 warm-up 阶梯逐步放量。重试也不能绕过该节奏。
+6. 正式发送由所有 Campaign 共用的发送人级闸门控制：默认每天（含周末）08:00–18:00（America/New_York），每分钟 1 封，不设每日数量上限，也不启用 warm-up 日额度。18:00 起暂停，次日 08:00 继续；完整发送窗口理论上可发送约 600 封。Portal 发起的 Campaign 和重试也遵守同一发送人节奏。`dailyLimit: null` 表示无日上限；仍可为其他发送人显式配置正整数额度。
 7. 在 Campaigns 查看 In progress、Preparing、Scheduled、Sending、Paused 或 Sent，并在 Reports 查看汇总。已有房源的落款人可在 Property Library 的 **Signature & replies** 改绑；所有 DRAFT Campaign 会同步并要求重新测试，已冻结或已发送快照保持不变。旧 `/listings`、`/audiences`、`/analytics` 链接会重定向到新页面。
 
 普通 Marketer 页面不需要理解 provider、model、audience filter、snapshot 或 worker；这些仍保留在服务端和管理员 Operations 中。旧 V2 API 继续兼容，自动保存使用 `If-Match`，测试和发布都要求当前版本。

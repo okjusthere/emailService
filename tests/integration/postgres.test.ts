@@ -392,18 +392,22 @@ describe("PostgreSQL delivery invariants", () => {
     expect(await prisma.senderProfile.count({ where: { isDefault: true } })).toBe(1);
   });
 
-  it("allows only one concurrent sender-wide delivery slot", async () => {
+  it("allows only one sender-wide delivery slot per minute even without a daily quota", async () => {
     const fixture = await createFixture(0);
+    await prisma.senderProfile.update({
+      where: { id: fixture.sender.id },
+      data: { dailyLimit: null, batchSize: 1, minBatchIntervalSeconds: 60 },
+    });
     const now = new Date("2026-08-25T15:00:00.000Z");
     const claims = await Promise.all([
       claimSenderDeliverySlot({
         senderProfileId: fixture.sender.id,
-        minIntervalSeconds: 300,
+        minIntervalSeconds: 60,
         now,
       }),
       claimSenderDeliverySlot({
         senderProfileId: fixture.sender.id,
-        minIntervalSeconds: 300,
+        minIntervalSeconds: 60,
         now,
       }),
     ]);
@@ -411,8 +415,22 @@ describe("PostgreSQL delivery invariants", () => {
     expect(claims.filter((claim) => claim.allowed)).toHaveLength(1);
     expect(claims.filter((claim) => !claim.allowed)).toHaveLength(1);
     expect(
-      claims.every((claim) => claim.nextAllowedAt.toISOString() === "2026-08-25T15:05:00.000Z")
+      claims.every((claim) => claim.nextAllowedAt.toISOString() === "2026-08-25T15:01:00.000Z")
     ).toBe(true);
+    await expect(
+      claimSenderDeliverySlot({
+        senderProfileId: fixture.sender.id,
+        minIntervalSeconds: 60,
+        now: new Date(now.getTime() + 59_999),
+      })
+    ).resolves.toMatchObject({ allowed: false });
+    await expect(
+      claimSenderDeliverySlot({
+        senderProfileId: fixture.sender.id,
+        minIntervalSeconds: 60,
+        now: new Date(now.getTime() + 60_000),
+      })
+    ).resolves.toMatchObject({ allowed: true });
     await prisma.campaign.delete({ where: { id: fixture.campaign.id } });
     await prisma.senderProfile.delete({ where: { id: fixture.sender.id } });
   });
@@ -1563,7 +1581,7 @@ describe("PostgreSQL delivery invariants", () => {
           senderProfileId: quota.sender.id,
           localDate: localDate(new Date(), quota.sender.timezone),
           timezone: quota.sender.timezone,
-          acceptedCount: quota.sender.dailyLimit,
+          acceptedCount: quota.sender.dailyLimit!,
         },
       });
       await dispatchCampaign({ campaignId: quota.campaign.id });
@@ -1585,6 +1603,47 @@ describe("PostgreSQL delivery invariants", () => {
         data: { value: { required: true } },
       });
     }
+  });
+
+  it("continues reserving after 100 accepted emails when the daily quota is removed", async () => {
+    const fixture = await createFixture(2);
+    const sender = await prisma.senderProfile.update({
+      where: { id: fixture.sender.id },
+      data: { dailyLimit: null, batchSize: 1, minBatchIntervalSeconds: 60 },
+    });
+    const usageDate = localDate(new Date(), sender.timezone);
+    await prisma.senderDailyUsage.create({
+      data: {
+        senderProfileId: sender.id,
+        localDate: usageDate,
+        timezone: sender.timezone,
+        acceptedCount: 1_000,
+      },
+    });
+
+    const reservations = await Promise.all(
+      Array.from({ length: 2 }, () =>
+        reserveCampaignRecipients({
+          campaignId: fixture.campaign.id,
+          senderProfileId: sender.id,
+          localDate: usageDate,
+          timezone: sender.timezone,
+          effectiveLimit: sender.dailyLimit,
+          requested: sender.batchSize,
+        })
+      )
+    );
+
+    expect(reservations.map((reservation) => reservation?.reserved)).toEqual([1, 1]);
+    const ids = reservations.flatMap((reservation) =>
+      (reservation?.recipients ?? []).map((recipient) => recipient.id)
+    );
+    expect(new Set(ids).size).toBe(2);
+    await expect(
+      prisma.senderDailyUsage.findUniqueOrThrow({
+        where: { senderProfileId_localDate: { senderProfileId: sender.id, localDate: usageDate } },
+      })
+    ).resolves.toMatchObject({ acceptedCount: 1_000, reservedCount: 2, releasedCount: 0 });
   });
 
   it("serializes concurrent quota reservations without duplicate recipients", async () => {

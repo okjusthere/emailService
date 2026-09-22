@@ -109,18 +109,35 @@ export function SendReviewDialog({
                 <dt>Delivery pace</dt>
                 <dd>{delivery.cadence}</dd>
               </div>
+              {campaign.senderProfile?.dailyLimit === null ? (
+                <div>
+                  <dt>Daily cap</dt>
+                  <dd>No daily cap</dd>
+                </div>
+              ) : null}
               <div>
-                <dt>Daily maximum</dt>
+                <dt>
+                  {campaign.senderProfile?.dailyLimit === null
+                    ? "Sending window capacity"
+                    : "Daily maximum"}
+                </dt>
                 <dd>
                   {delivery.warmup
                     ? `${delivery.currentDailyMaximum.toLocaleString()} initially · up to ${delivery.dailyMaximum.toLocaleString()}`
-                    : `Up to ${delivery.dailyMaximum.toLocaleString()}`}
+                    : `Up to ${delivery.dailyMaximum.toLocaleString()}/day`}
+                </dd>
+              </div>
+              <div>
+                <dt>Sending window</dt>
+                <dd>
+                  {campaign.senderProfile?.sendWindowStart}–{campaign.senderProfile?.sendWindowEnd}{" "}
+                  · {campaign.senderProfile?.timezone}
                 </dd>
               </div>
               <div>
                 <dt>Estimated completion</dt>
                 <dd>
-                  About {delivery.businessDays} business{" "}
+                  About {delivery.businessDays} sending{" "}
                   {delivery.businessDays === 1 ? "day" : "days"}
                 </dd>
               </div>

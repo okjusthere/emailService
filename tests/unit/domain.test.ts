@@ -152,6 +152,59 @@ describe("campaign state machine", () => {
 });
 
 describe("suppression, quota, and retry policy", () => {
+  it("removes the daily quota without disabling an explicitly configured warm-up", () => {
+    const input = {
+      dailyLimit: null,
+      warmupEnabled: false,
+      warmupStartDate: new Date("2026-09-01T12:00:00Z"),
+      warmupSchedule: [{ day: 1, limit: 30 }],
+      now: new Date("2026-09-21T12:00:00Z"),
+      timezone: "America/New_York",
+    };
+    expect(effectiveDailyLimit(input)).toBeNull();
+    expect(remainingQuota(null, 1_000, 100)).toBeNull();
+    expect(effectiveDailyLimit({ ...input, warmupEnabled: true })).toBe(30);
+    expect(effectiveDailyLimit({ ...input, warmupEnabled: true, warmupSchedule: [] })).toBeNull();
+    expect(
+      effectiveDailyLimit({ ...input, warmupEnabled: true, warmupStartDate: null })
+    ).toBeNull();
+  });
+
+  it.each([
+    ["2026-09-20T11:59:59Z", false],
+    ["2026-09-20T12:00:00Z", true],
+    ["2026-09-20T21:59:59Z", true],
+    ["2026-09-20T22:00:00Z", false],
+    ["2026-11-01T12:59:59Z", false],
+    ["2026-11-01T13:00:00Z", true],
+    ["2026-11-01T23:00:00Z", false],
+  ])("enforces the everyday 08:00–18:00 ET window at %s", (timestamp, expected) => {
+    expect(
+      isInsideSendWindow(
+        new Date(timestamp),
+        "America/New_York",
+        "08:00",
+        "18:00",
+        [0, 1, 2, 3, 4, 5, 6]
+      )
+    ).toBe(expected);
+  });
+
+  it.each([
+    ["2026-03-07T23:00:00Z", "2026-03-08T12:00:00.000Z"],
+    ["2026-10-31T22:00:00Z", "2026-11-01T13:00:00.000Z"],
+  ])("resumes at 08:00 ET across a weekend DST change from %s", (timestamp, expected) => {
+    expect(
+      nextSendWindow(
+        new Date(timestamp),
+        "America/New_York",
+        "08:00",
+        "18:00",
+        [0, 1, 2, 3, 4, 5, 6]
+      ).toISOString()
+    ).toBe(expected);
+  });
+
   it("never downgrades a stronger suppression", () => {
     expect(stricterSuppression(SuppressionReason.COMPLAINT, SuppressionReason.MANUAL)).toBe(
       SuppressionReason.COMPLAINT
