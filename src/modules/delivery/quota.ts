@@ -4,13 +4,13 @@ export interface WarmupDay {
 }
 
 export function effectiveDailyLimit(input: {
-  dailyLimit: number;
+  dailyLimit: number | null;
   warmupEnabled: boolean;
   warmupStartDate: Date | null;
   warmupSchedule: WarmupDay[];
   now: Date;
   timezone: string;
-}): number {
+}): number | null {
   if (!input.warmupEnabled || !input.warmupStartDate || input.warmupSchedule.length === 0)
     return input.dailyLimit;
   const dateKey = (date: Date) =>
@@ -24,13 +24,17 @@ export function effectiveDailyLimit(input: {
   const current = new Date(`${dateKey(input.now)}T12:00:00Z`);
   const day = Math.max(1, Math.floor((current.getTime() - start.getTime()) / 86_400_000) + 1);
   const sorted = [...input.warmupSchedule].sort((a, b) => a.day - b.day);
-  let scheduledLimit = sorted[0]?.limit ?? input.dailyLimit;
+  let scheduledLimit = sorted[0]!.limit;
   for (const entry of sorted) if (day >= entry.day) scheduledLimit = entry.limit;
-  return Math.max(0, Math.min(input.dailyLimit, scheduledLimit));
+  return Math.max(0, Math.min(input.dailyLimit ?? Infinity, scheduledLimit));
 }
 
-export function remainingQuota(limit: number, accepted: number, reserved: number): number {
-  return Math.max(0, limit - accepted - reserved);
+export function remainingQuota(
+  limit: number | null,
+  accepted: number,
+  reserved: number
+): number | null {
+  return limit === null ? null : Math.max(0, limit - accepted - reserved);
 }
 
 export function localDate(now: Date, timezone: string): Date {

@@ -70,7 +70,7 @@ export type Campaign = {
     name: string;
     fromEmail: string;
     fromName?: string;
-    dailyLimit: number;
+    dailyLimit: number | null;
     batchSize: number;
     minBatchIntervalSeconds: number;
     timezone: string;

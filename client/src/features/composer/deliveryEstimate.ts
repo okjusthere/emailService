@@ -1,5 +1,5 @@
 export type DeliveryPacing = {
-  dailyLimit: number;
+  dailyLimit: number | null;
   batchSize: number;
   minBatchIntervalSeconds: number;
   timezone: string;
@@ -34,16 +34,16 @@ function zonedWeekday(date: Date, timezone: string): number {
 }
 
 function warmupLimit(profile: DeliveryPacing, date: Date): number {
+  const dailyLimit = profile.dailyLimit ?? Number.POSITIVE_INFINITY;
   if (!profile.warmupEnabled || !profile.warmupStartDate || !profile.warmupSchedule?.length)
-    return profile.dailyLimit;
+    return dailyLimit;
   const startDateKey = profile.warmupStartDate.slice(0, 10);
   const start = new Date(`${startDateKey}T12:00:00Z`);
   const current = new Date(`${zonedDateKey(date, profile.timezone)}T12:00:00Z`);
   const day = Math.max(1, Math.floor((current.getTime() - start.getTime()) / 86_400_000) + 1);
-  let limit =
-    [...profile.warmupSchedule].sort((a, b) => a.day - b.day)[0]?.limit ?? profile.dailyLimit;
+  let limit = [...profile.warmupSchedule].sort((a, b) => a.day - b.day)[0]?.limit ?? dailyLimit;
   for (const entry of profile.warmupSchedule) if (day >= entry.day) limit = entry.limit;
-  return Math.min(profile.dailyLimit, limit);
+  return Math.min(dailyLimit, limit);
 }
 
 export function estimateGradualDelivery(
@@ -64,20 +64,15 @@ export function estimateGradualDelivery(
   const batchesPerDay =
     Math.floor((windowMinutes * 60 - 1) / Math.max(1, profile.minBatchIntervalSeconds)) + 1;
   const windowCapacity = Math.max(1, batchesPerDay * profile.batchSize);
+  const dailyMaximum = Math.min(profile.dailyLimit ?? Number.POSITIVE_INFINITY, windowCapacity);
   let remaining = Math.max(0, recipients);
   let businessDays = 0;
   const cursor = new Date(start);
   cursor.setUTCHours(16, 0, 0, 0);
-  const currentDailyMaximum = Math.max(
-    1,
-    Math.min(profile.dailyLimit, warmupLimit(profile, cursor), windowCapacity)
-  );
+  const currentDailyMaximum = Math.max(1, Math.min(warmupLimit(profile, cursor), dailyMaximum));
   for (let day = 0; remaining > 0 && day < 366; day += 1) {
     if (profile.allowedWeekdays.includes(zonedWeekday(cursor, profile.timezone))) {
-      remaining -= Math.max(
-        1,
-        Math.min(profile.dailyLimit, warmupLimit(profile, cursor), windowCapacity)
-      );
+      remaining -= Math.max(1, Math.min(warmupLimit(profile, cursor), dailyMaximum));
       businessDays += 1;
     }
     cursor.setUTCDate(cursor.getUTCDate() + 1);
@@ -89,7 +84,7 @@ export function estimateGradualDelivery(
     businessDays,
     cadence: `${batchLabel} every ${intervalMinutes} ${intervalMinutes === 1 ? "minute" : "minutes"}`,
     currentDailyMaximum,
-    dailyMaximum: Math.min(profile.dailyLimit, windowCapacity),
+    dailyMaximum,
     warmup: profile.warmupEnabled,
   };
 }

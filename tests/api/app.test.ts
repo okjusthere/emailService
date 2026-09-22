@@ -85,6 +85,65 @@ describe("HTTP security and API contract", () => {
     await prisma.user.update({ where: { id: user.id }, data: { role: "ADMIN" } });
   });
 
+  it("persists unlimited daily quota through sender creation, updates, and quota reads", async () => {
+    const created = await agent
+      .post("/api/v2/sender-profiles")
+      .set(mutationHeaders)
+      .send({
+        name: "Unlimited API Test",
+        fromName: "Homix Test",
+        fromEmail: `unlimited-api-${Date.now()}@example.com`,
+        domain: "example.com",
+        dailyLimit: null,
+        batchSize: 1,
+        minBatchIntervalSeconds: 60,
+        timezone: "America/New_York",
+        sendWindowStart: "08:00",
+        sendWindowEnd: "18:00",
+        allowedWeekdays: [0, 1, 2, 3, 4, 5, 6],
+        warmupEnabled: false,
+      })
+      .expect(201);
+    const senderId = created.body.id as string;
+    try {
+      expect(created.body.dailyLimit).toBeNull();
+      expect(
+        (await prisma.senderProfile.findUniqueOrThrow({ where: { id: senderId } })).dailyLimit
+      ).toBeNull();
+
+      const capped = await agent
+        .patch(`/api/v2/sender-profiles/${senderId}`)
+        .set(mutationHeaders)
+        .send({ dailyLimit: 100 })
+        .expect(200);
+      expect(capped.body.dailyLimit).toBe(100);
+
+      const unlimited = await agent
+        .patch(`/api/v2/sender-profiles/${senderId}`)
+        .set(mutationHeaders)
+        .send({ dailyLimit: null })
+        .expect(200);
+      expect(unlimited.body).toMatchObject({
+        dailyLimit: null,
+        batchSize: 1,
+        minBatchIntervalSeconds: 60,
+        timezone: "America/New_York",
+        sendWindowStart: "08:00",
+        sendWindowEnd: "18:00",
+        allowedWeekdays: [0, 1, 2, 3, 4, 5, 6],
+        warmupEnabled: false,
+      });
+      expect(
+        (await prisma.senderProfile.findUniqueOrThrow({ where: { id: senderId } })).dailyLimit
+      ).toBeNull();
+
+      const quota = await agent.get(`/api/v2/sender-profiles/${senderId}/quota`).expect(200);
+      expect(quota.body).toEqual({ dailyLimit: null, usage: [] });
+    } finally {
+      await prisma.senderProfile.delete({ where: { id: senderId } });
+    }
+  });
+
   it("verifies the untouched raw webhook body and deduplicates replay", async () => {
     const body = JSON.stringify({
       type: "unknown.future_event",

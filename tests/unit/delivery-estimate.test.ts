@@ -57,4 +57,51 @@ describe("gradual delivery estimate", () => {
       }).cadence
     ).toBe("20 emails every 1 minute");
   });
+
+  it("bounds an uncapped daily sender by its 08:00–18:00 window", () => {
+    expect(
+      estimateGradualDelivery(
+        1201,
+        {
+          ...pacing,
+          dailyLimit: null,
+          minBatchIntervalSeconds: 60,
+          sendWindowStart: "08:00",
+          sendWindowEnd: "18:00",
+          allowedWeekdays: [0, 1, 2, 3, 4, 5, 6],
+          warmupEnabled: false,
+        },
+        new Date("2026-08-28T12:00:00.000Z")
+      )
+    ).toEqual({
+      businessDays: 3,
+      cadence: "1 email every 1 minute",
+      currentDailyMaximum: 600,
+      dailyMaximum: 600,
+      warmup: false,
+    });
+  });
+
+  it("preserves optional warm-up limits without a daily cap, including weekend sends", () => {
+    expect(
+      estimateGradualDelivery(
+        61,
+        {
+          ...pacing,
+          dailyLimit: null,
+          minBatchIntervalSeconds: 60,
+          sendWindowStart: "08:00",
+          sendWindowEnd: "18:00",
+          allowedWeekdays: [0, 1, 2, 3, 4, 5, 6],
+          warmupStartDate: "2026-08-28T00:00:00.000Z",
+        },
+        new Date("2026-08-28T12:00:00.000Z")
+      )
+    ).toMatchObject({
+      businessDays: 3,
+      currentDailyMaximum: 30,
+      dailyMaximum: 600,
+      warmup: true,
+    });
+  });
 });

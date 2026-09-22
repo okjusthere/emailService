@@ -92,7 +92,7 @@ export async function reserveCampaignRecipients(input: {
   senderProfileId: string;
   localDate: Date;
   timezone: string;
-  effectiveLimit: number;
+  effectiveLimit: number | null;
   requested: number;
 }): Promise<{ batchId: string; recipients: ClaimedRecipientRow[]; reserved: number } | null> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -113,13 +113,16 @@ export async function reserveCampaignRecipients(input: {
     `);
           const row = usage[0];
           if (!row) throw new DomainError("QUOTA_ROW_MISSING", "Unable to lock sender quota.", 500);
-          const allowed = Math.max(
-            0,
-            Math.min(
-              input.requested,
-              input.effectiveLimit - row.accepted_count - row.reserved_count
-            )
-          );
+          const allowed =
+            input.effectiveLimit === null
+              ? input.requested
+              : Math.max(
+                  0,
+                  Math.min(
+                    input.requested,
+                    input.effectiveLimit - row.accepted_count - row.reserved_count
+                  )
+                );
           if (allowed === 0) return null;
           const claimToken = randomUUID();
           const recipients = await tx.$queryRaw<ClaimedRecipientRow[]>(Prisma.sql`

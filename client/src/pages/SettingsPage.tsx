@@ -14,7 +14,7 @@ type Sender = {
   verificationStatus: string;
   isDefault: boolean;
   isActive: boolean;
-  dailyLimit: number;
+  dailyLimit: number | null;
 };
 type Agent = {
   id: string;
@@ -163,7 +163,10 @@ export function SettingsPage({ user }: { user: User }) {
                         {sender.isDefault ? " · Default" : ""}
                       </strong>
                       <small>
-                        {sender.fromEmail} · up to {sender.dailyLimit.toLocaleString()}/day
+                        {sender.fromEmail} ·{" "}
+                        {sender.dailyLimit === null
+                          ? "No daily cap"
+                          : `up to ${sender.dailyLimit.toLocaleString()}/day`}
                       </small>
                     </span>
                     <StatusBadge value={sender.verificationStatus} />
