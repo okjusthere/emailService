@@ -471,7 +471,9 @@ test("completes the simplified listing email composer on desktop and mobile", as
   await page.screenshot({ path: "artifacts/screenshots/send-review-dialog.png", fullPage: true });
   await page.getByRole("button", { name: "Start gradual send" }).click();
   await page.screenshot({ path: "artifacts/screenshots/campaign-sending.png", fullPage: true });
-  await expect(page.getByText("Sent")).toBeVisible({ timeout: 20_000 });
+  await expect(
+    page.locator(".campaign-detail-head").getByText("Sent", { exact: true })
+  ).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("External Agent")).toBeVisible({ timeout: 10_000 });
   await page.screenshot({ path: "artifacts/screenshots/campaign-completed.png", fullPage: true });
 

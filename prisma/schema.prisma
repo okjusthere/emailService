@@ -119,6 +119,8 @@ enum ListingAssetKind {
 enum SuppressionReason {
   UNSUBSCRIBE
   HARD_BOUNCE
+  SOFT_BOUNCE
+  BOUNCE_REVIEW
   COMPLAINT
   PROVIDER_SUPPRESSED
   LEGACY_BOUNCE_REVIEW
@@ -555,6 +557,29 @@ model ListingAsset {
   @@map("listing_assets")
 }
 
+model ProviderDomainTracking {
+  id                   String    @id @default(uuid()) @db.Uuid
+  provider             String
+  domain               String
+  providerDomainId     String?   @map("provider_domain_id")
+  openTrackingEnabled  Boolean?  @map("open_tracking_enabled")
+  clickTrackingEnabled Boolean?  @map("click_tracking_enabled")
+  trackingDomain       String?   @map("tracking_domain")
+  trackingVerified     Boolean   @default(false) @map("tracking_verified")
+  revision             Int       @default(1)
+  checkedAt            DateTime? @map("checked_at") @db.Timestamptz(3)
+  lastAttemptAt        DateTime? @map("last_attempt_at") @db.Timestamptz(3)
+  refreshToken         String?   @map("refresh_token") @db.Uuid
+  refreshLeaseUntil    DateTime? @map("refresh_lease_until") @db.Timestamptz(3)
+  lastError            String?   @map("last_error")
+  verifiedAt           DateTime? @map("verified_at") @db.Timestamptz(3)
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([provider, domain])
+  @@map("provider_domain_tracking")
+}
+
 model SenderProfile {
   id                      String                   @id @default(uuid()) @db.Uuid
   name                    String
@@ -649,6 +674,8 @@ model Campaign {
   bouncedCount            Int                 @default(0) @map("bounced_count")
   complainedCount         Int                 @default(0) @map("complained_count")
   failedCount             Int                 @default(0) @map("failed_count")
+  reportingSummary        Json?               @map("reporting_summary")
+  statsComputedAt         DateTime?           @map("stats_computed_at") @db.Timestamptz(3)
   createdByUserId         String              @map("created_by_user_id") @db.Uuid
   updatedByUserId         String              @map("updated_by_user_id") @db.Uuid
   createdAt               DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -700,7 +727,15 @@ model CampaignRecipient {
   deliveredAt          DateTime?              @map("delivered_at") @db.Timestamptz(3)
   openedAt             DateTime?              @map("opened_at") @db.Timestamptz(3)
   clickedAt            DateTime?              @map("clicked_at") @db.Timestamptz(3)
+  listingClickedAt     DateTime?              @map("listing_clicked_at") @db.Timestamptz(3)
+  clickTrackingEnabled Boolean?              @map("click_tracking_enabled")
+  openTrackingEnabled  Boolean?              @map("open_tracking_enabled")
+  trackingCheckedAt    DateTime?              @map("tracking_checked_at") @db.Timestamptz(3)
+  trackingRevision     String?                @map("tracking_revision")
   bouncedAt            DateTime?              @map("bounced_at") @db.Timestamptz(3)
+  bounceType           String?                @map("bounce_type")
+  bounceSubType        String?                @map("bounce_sub_type")
+  bounceReason         String?                @map("bounce_reason")
   complainedAt         DateTime?              @map("complained_at") @db.Timestamptz(3)
   providerSuppressedAt DateTime?              @map("provider_suppressed_at") @db.Timestamptz(3)
   lastProviderEventAt  DateTime?              @map("last_provider_event_at") @db.Timestamptz(3)
@@ -731,6 +766,8 @@ model SendBatch {
   status               SendBatchStatus
   idempotencyKey       String                   @unique @map("idempotency_key")
   requestHash          String                   @map("request_hash")
+  trackingSnapshot     Json?                    @map("tracking_snapshot")
+  trackingCoverageUncertain Boolean             @default(false) @map("tracking_coverage_uncertain")
   recipientCount       Int                      @map("recipient_count")
   acceptedCount        Int                      @default(0) @map("accepted_count")
   failedCount          Int                      @default(0) @map("failed_count")
@@ -788,6 +825,8 @@ model EmailEvent {
   eventCreatedAt         DateTime                    @map("event_created_at") @db.Timestamptz(3)
   campaignRecipientId    String?                     @map("campaign_recipient_id") @db.Uuid
   payload                Json
+  linkPurpose            String?                     @map("link_purpose")
+  automationClassification String?                   @map("automation_classification")
   processedAt            DateTime?                   @map("processed_at") @db.Timestamptz(3)
   processingError        String?                     @map("processing_error")
   reconciliationStatus   WebhookReconciliationStatus @default(RECEIVED) @map("reconciliation_status")

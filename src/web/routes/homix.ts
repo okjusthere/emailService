@@ -30,6 +30,7 @@ import {
 } from "../../modules/onekey/service.js";
 import { getOneKeyProvider } from "../../integrations/onekey/index.js";
 import { generateCampaignCopy, applyCampaignCopy } from "../../modules/ai/service.js";
+import { buildSendingReporting } from "../../modules/analytics/sending.js";
 
 export const homixRouter = Router();
 const companySchema = z.record(
@@ -181,6 +182,14 @@ function dto(c: CampaignRecord) {
       failedCount: c.failedCount,
       suppressedCount: c.suppressedCount,
     },
+    reporting:
+      c.reportingSummary &&
+      typeof c.reportingSummary === "object" &&
+      !Array.isArray(c.reportingSummary) &&
+      c.reportingSummary.version === 1
+        ? { ...c.reportingSummary, sending: buildSendingReporting(c) }
+        : null,
+    statsComputedAt: c.statsComputedAt,
   };
 }
 function portalContext(

@@ -51,6 +51,33 @@ Settings → Manual review exposes `MARK_ACCEPTED`, `MARK_NOT_SENT`, `ATTACH_PRO
 
 An unmatched signed Webhook is not marked complete. Worker retries after 30 seconds, 2 minutes, 10 minutes, 30 minutes and 2 hours, which allows a delayed provider ID commit to become visible. After the final miss it becomes `DEAD_LETTER`. Settings → Webhooks shows pending/dead-letter events and attempts. Investigate provider ID, recipient creation and event timing; never edit the payload or invent a recipient link. Replay processing only after the missing local record is repaired.
 
+## Engagement reporting and Resend domain tracking
+
+Portal reports listing-link requests, not readers or sales leads. Opens are omitted from its main report. Delivery means the receiving mail server accepted the message, not inbox placement. Current delivered, pending and undelivered results partition accepted messages; historical receipt timestamps remain available. Click rate uses only the same tracked recipients with delivery receipts in both numerator and denominator. Explicit bot user agents and unsubscribe/company links do not count as listing CTA clicks; unrecognized clients remain unknown rather than being labeled human.
+
+Resend domain configuration is authoritative. Sender tracking fields are read-only mirrors; attempts to edit them return `TRACKING_MANAGED_BY_PROVIDER_DOMAIN`. An admin can read back current configuration with `POST /api/v2/sender-profiles/:id/tracking/refresh` or `node dist/server/scripts/refresh-domain-tracking.js updates.homixny.com`. A true capability requires both the provider flag and the exact current tracking CNAME to be verified. Reads are cached for five minutes, bounded by an eight-second timeout, and serialized across replicas. Failed or stale reads produce unknown coverage and do not intentionally stop normal sending.
+
+Each batch freezes its tracking snapshot before first submission. Idempotency retries preserve that original snapshot as history and read current configuration again. If the retry crosses a changed or unknown configuration boundary, a sticky uncertainty flag makes accepted-recipient coverage unknown, including later manual acceptance. Historical nulls are unknown, never backfilled from today's settings. Campaign metrics return `null` when unmeasured, genuine `0` only within a known tracked cohort, and `partial` when only some accepted messages were tracked. Monitor webhook pending/dead-letter queues and the report's `asOf`; no clicks alone is not evidence of a broken pipeline.
+
+For the Homix marketing rollout, use only `updates.homixny.com` (shared by the Portal brands). Keep open tracking off and enable click tracking with the `links` subdomain. Do not change invoice/info domains.
+
+1. Deploy the additive migration, Web and Worker before enabling tracking. Run `node dist/server/scripts/backfill-campaign-reporting.js` for a dry-run, then `--apply` to populate derived summaries. This command does not run deliverability guards, change suppression, or infer old tracking coverage.
+2. Pause sending through the audited admin flow, retain the previous pause state, and wait for in-flight submissions to settle. Include `PREPARING`, `SUBMITTING`, `TEMPORARY_FAILED` and `MANUAL_REVIEW` batches in boundary reconciliation. Resolve pending retries before switching; where original acceptance or effective tracking cannot be established, retain unknown coverage rather than assigning today's configuration. Do not clear sender cadence or resend accepted messages.
+3. Read the actual Resend domain ID and configuration. In Domains → Configuration (or the official domain update API), set `click_tracking=true`, `open_tracking=false`, `tracking_subdomain=links`. Add the exact DNS records returned by Resend at the authoritative DNS provider. Configure any required CAA authorization according to those instructions; never guess the CNAME target.
+4. Read back the provider state until the current tracking record is verified, then force the service observation refresh. Keep tracking DNS after activation, including after a later rollback. A verified sender domain alone is insufficient.
+5. Use approved internal recipients in an isolated campaign with actual recipient/provider-ID mapping. Check received HTML, HTTPS tracking redirect and final CTA, visible and one-click unsubscribe, signed webhook classification, unique-recipient count and Portal refresh. Record this acceptance evidence and timestamp in the operational audit; provider configuration alone is not end-to-end acceptance.
+6. Restore the prior sending state only after boundary reconciliation. Never claim old untracked messages are measurable or resend them to collect analytics. Follow existing pacing and shared queue policy.
+
+If DNS access or end-to-end validation is unavailable, keep the provider flags unchanged and release the accurate unavailable-state UI first. To roll back tracking, disable future tracking in Resend, refresh observations at a controlled send boundary, retain all historical events/snapshots, and **keep the existing tracking DNS** so previously sent links continue working. See [Resend tracking configuration](https://resend.com/docs/dashboard/domains/tracking).
+
+## Bounce classification and historical review
+
+`Permanent` creates `HARD_BOUNCE`; `Transient` creates a `SOFT_BOUNCE` review hold; `Undetermined` creates `BOUNCE_REVIEW`. Temporary and undetermined holds remain active until reviewed, without declaring the address permanently invalid. `delivery_delayed` leaves retry responsibility with the provider. Never send the same accepted message again because it bounced or was delayed.
+
+Suppression causes are appended to the audit trail and stronger existing reasons win. In particular, a later temporary bounce cannot override a complaint, unsubscribe, permanent bounce or administrator hold. Diagnostic summaries use fixed safe text; raw provider diagnostics are not exposed to Portal.
+
+Run `node dist/server/scripts/audit-bounce-classification.js --limit 500` to inspect historical `HARD_BOUNCE` rows. The script enforces a read-only transaction and reports candidate IDs without recipient addresses. It never releases a hold, reclassifies records or resends. Examine all cause history before any separately reviewed historical correction; missing evidence is a reason to keep the hold. An old unclassified bounce is displayed as awaiting classification, not silently assumed permanent.
+
 ## API key rotation
 
 1. Create a new Resend API key.
@@ -93,7 +120,7 @@ While delivery remains disabled or sandboxed, test at least two imported listing
 2. Verify `/api/v2/ai/status` reports `mode=production`, generate/apply listing and Campaign proposals, activate the reviewed listing, let the Composer automatically import the BBO recipient audience, and inspect the eligible/held-back estimate.
 3. Preview and send a new allowlisted canary. Confirm complete content, listing Agent signature/Reply-To, visible unsubscribe, provider delivered event and signed webhook processing.
 4. Mark the current Campaign ready. Clear the recovery guard and global pause through the audited Admin resume endpoint with a real reason.
-5. Deploy `EMAIL_DELIVERY_MODE=live`. Confirm the review dialog reports one email every five minutes, the daily warm-up ceiling and the estimated completion time before starting the small scheduled Campaign; do not bypass permission, suppression, test-send, sender-slot or quota gates.
+5. Deploy `EMAIL_DELIVERY_MODE=live`. Confirm the review dialog matches the persisted sender policy and estimated timing before starting the small scheduled Campaign; do not bypass permission, suppression, test-send, sender-slot or quota gates.
 6. Watch delivered, hard bounce and complaint events. Pause immediately on an unexpected audience, identity, content, webhook or deliverability result.
 
 ## Complaint or bounce spike

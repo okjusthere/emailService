@@ -139,6 +139,22 @@ describe("HTTP security and API contract", () => {
 
       const quota = await agent.get(`/api/v2/sender-profiles/${senderId}/quota`).expect(200);
       expect(quota.body).toEqual({ dailyLimit: null, usage: [] });
+      const trackingEdit = await agent
+        .patch(`/api/v2/sender-profiles/${senderId}`)
+        .set(mutationHeaders)
+        .send({ clickTrackingEnabled: true })
+        .expect(409);
+      expect(trackingEdit.body.error.code).toBe("TRACKING_MANAGED_BY_PROVIDER_DOMAIN");
+      const tracking = await agent
+        .post(`/api/v2/sender-profiles/${senderId}/tracking/refresh`)
+        .set(mutationHeaders)
+        .send({})
+        .expect(200);
+      expect(tracking.body.tracking).toMatchObject({
+        clickTrackingEnabled: null,
+        openTrackingEnabled: null,
+        managedBy: "provider-domain",
+      });
     } finally {
       await prisma.senderProfile.delete({ where: { id: senderId } });
     }

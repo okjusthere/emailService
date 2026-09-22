@@ -28,7 +28,17 @@ export interface VerifiedWebhookEvent {
   payload: Record<string, unknown>;
 }
 
+export interface ProviderDomainObservation {
+  providerDomainId: string;
+  domain: string;
+  openTrackingEnabled: boolean | null;
+  clickTrackingEnabled: boolean | null;
+  trackingDomain: string | null;
+  trackingVerified: boolean;
+}
+
 export interface EmailProvider {
+  getDomainTracking?(domain: string, providerDomainId?: string): Promise<ProviderDomainObservation>;
   sendBatch(
     messages: ProviderMessage[],
     options: { idempotencyKey: string }

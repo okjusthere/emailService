@@ -47,6 +47,7 @@ import {
   validateContactImport,
 } from "../../modules/imports/service.js";
 import { upsertSuppression } from "../../modules/suppressions/domain.js";
+import { observeDomainTracking } from "../../modules/tracking/service.js";
 import {
   getOneKeyListingReview,
   importOneKeyListing,
@@ -1158,10 +1159,39 @@ const senderSchema = z.object({
   isDefault: z.boolean().optional(),
 });
 router.get("/sender-profiles", async (_req, res) => {
-  res.json({ items: await prisma.senderProfile.findMany({ orderBy: { name: "asc" } }) });
+  const senders = await prisma.senderProfile.findMany({ orderBy: { name: "asc" } });
+  const observations = new Map<string, ReturnType<typeof observeDomainTracking>>();
+  const items = await Promise.all(
+    senders.map(async (sender) => {
+      const domain = sender.fromEmailNormalized.split("@").at(-1)!;
+      const key = `${sender.provider}:${domain}`;
+      if (!observations.has(key))
+        observations.set(key, observeDomainTracking(sender.provider, domain));
+      const tracking = await observations.get(key)!;
+      return {
+        ...sender,
+        openTrackingEnabled: tracking.openTrackingEnabled,
+        clickTrackingEnabled: tracking.clickTrackingEnabled,
+        tracking: { ...tracking, managedBy: "provider-domain" },
+      };
+    })
+  );
+  res.json({ items });
 });
+function assertProviderManagedTracking(input: {
+  openTrackingEnabled?: boolean;
+  clickTrackingEnabled?: boolean;
+}) {
+  if (input.openTrackingEnabled !== undefined || input.clickTrackingEnabled !== undefined)
+    throw new DomainError(
+      "TRACKING_MANAGED_BY_PROVIDER_DOMAIN",
+      "Configure tracking on the sending domain in Resend, then refresh its verified status.",
+      409
+    );
+}
 router.post("/sender-profiles", requireRole("ADMIN"), async (req, res) => {
   const input = senderSchema.parse(req.body);
+  assertProviderManagedTracking(input);
   const item = await inTransaction(async (tx) => {
     if (input.isDefault) await tx.senderProfile.updateMany({ data: { isDefault: false } });
     return tx.senderProfile.create({
@@ -1177,6 +1207,7 @@ router.post("/sender-profiles", requireRole("ADMIN"), async (req, res) => {
 router.patch("/sender-profiles/:id", requireRole("ADMIN"), async (req, res) => {
   const { id } = idParam.parse(req.params);
   const input = senderSchema.partial().parse(req.body);
+  assertProviderManagedTracking(input);
   const item = await inTransaction(async (tx) => {
     if (input.isDefault)
       await tx.senderProfile.updateMany({ where: { id: { not: id } }, data: { isDefault: false } });
@@ -1189,6 +1220,13 @@ router.patch("/sender-profiles/:id", requireRole("ADMIN"), async (req, res) => {
     });
   });
   res.json(item);
+});
+router.post("/sender-profiles/:id/tracking/refresh", requireRole("ADMIN"), async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  const sender = await prisma.senderProfile.findUniqueOrThrow({ where: { id } });
+  const domain = sender.fromEmailNormalized.split("@").at(-1)!;
+  const tracking = await observeDomainTracking(sender.provider, domain, true);
+  res.json({ tracking: { ...tracking, managedBy: "provider-domain" } });
 });
 router.post("/sender-profiles/:id/verify", requireRole("ADMIN"), async (req, res) => {
   const { id } = idParam.parse(req.params);

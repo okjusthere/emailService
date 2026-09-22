@@ -63,6 +63,8 @@ export type Campaign = {
   bouncedCount?: number;
   complainedCount?: number;
   failedCount?: number;
+  reportingSummary?: CampaignReporting | null;
+  statsComputedAt?: string | null;
   updatedAt: string;
   listing?: Listing | null;
   senderProfile?: {
@@ -90,3 +92,4 @@ export type AiStatus = {
   productionReady: boolean;
   mode: "disabled" | "test" | "production";
 };
+import type { CampaignReporting } from "../../../src/modules/analytics/reporting.js";

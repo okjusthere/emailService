@@ -38,6 +38,7 @@ import { resolveManualReview } from "../../src/modules/delivery/manualReview.js"
 import { localDate } from "../../src/modules/delivery/quota.js";
 import { ingestWebhook, processWebhookEvent } from "../../src/modules/webhooks/service.js";
 import { recomputeCampaignStats } from "../../src/modules/analytics/service.js";
+import { observeDomainTracking } from "../../src/modules/tracking/service.js";
 import { resolveAzureUser } from "../../src/modules/auth/service.js";
 import {
   confirmedImportMapping,
@@ -1861,6 +1862,190 @@ describe("PostgreSQL delivery invariants", () => {
     expect(usage).toMatchObject({ reservedCount: 0, acceptedCount: 2 });
   });
 
+  it("preserves retry history but marks coverage unknown after domain configuration changes", async () => {
+    class TrackedProvider extends FakeEmailProvider {
+      enabled = true;
+      calls = 0;
+      async getDomainTracking(domain: string) {
+        this.calls++;
+        return {
+          providerDomainId: "test-domain",
+          domain,
+          openTrackingEnabled: false,
+          clickTrackingEnabled: this.enabled,
+          trackingDomain: `links.${domain}`,
+          trackingVerified: true,
+        };
+      }
+    }
+    const provider = new TrackedProvider();
+    setEmailProviderForTest(provider);
+    await prisma.providerDomainTracking.deleteMany({ where: { domain: "example.com" } });
+    const first = await createFixture(1);
+    const claimed = await reserveAll(first);
+    provider.mode = "temporary";
+    await executeReservedBatch(first.campaign.id, claimed.batchId);
+    const frozen = (await prisma.sendBatch.findUniqueOrThrow({ where: { id: claimed.batchId } }))
+      .trackingSnapshot;
+    expect(frozen).toMatchObject({ clickTrackingEnabled: true, openTrackingEnabled: false });
+    provider.enabled = false;
+    await observeDomainTracking(first.sender.provider, "example.com", true);
+    provider.mode = "accepted";
+    await executeReservedBatch(first.campaign.id, claimed.batchId);
+    const accepted = await prisma.campaignRecipient.findUniqueOrThrow({
+      where: { id: first.recipients[0]!.id },
+    });
+    expect(accepted).toMatchObject({ clickTrackingEnabled: null, openTrackingEnabled: null });
+    expect(
+      (await prisma.sendBatch.findUniqueOrThrow({ where: { id: claimed.batchId } }))
+        .trackingSnapshot
+    ).toEqual(frozen);
+    expect(
+      await prisma.sendBatch.findUniqueOrThrow({ where: { id: claimed.batchId } })
+    ).toMatchObject({ trackingCoverageUncertain: true });
+    const second = await createFixture(1);
+    const next = await reserveAll(second);
+    await executeReservedBatch(second.campaign.id, next.batchId);
+    expect(
+      await prisma.campaignRecipient.findUniqueOrThrow({ where: { id: second.recipients[0]!.id } })
+    ).toMatchObject({ clickTrackingEnabled: false, openTrackingEnabled: false });
+    expect(provider.calls).toBe(3);
+  });
+
+  it.each([true, false])(
+    "retains known retry coverage when click tracking remains %s",
+    async (enabled) => {
+      class StableTrackingProvider extends FakeEmailProvider {
+        calls = 0;
+        async getDomainTracking(domain: string) {
+          this.calls++;
+          return {
+            providerDomainId: "stable-domain",
+            domain,
+            openTrackingEnabled: false,
+            clickTrackingEnabled: enabled,
+            trackingDomain: `links.${domain}`,
+            trackingVerified: true,
+          };
+        }
+      }
+      const provider = new StableTrackingProvider();
+      setEmailProviderForTest(provider);
+      await prisma.providerDomainTracking.deleteMany({ where: { domain: "example.com" } });
+      const fixture = await createFixture(1);
+      const claimed = await reserveAll(fixture);
+      provider.mode = "temporary";
+      await executeReservedBatch(fixture.campaign.id, claimed.batchId);
+      const frozen = (await prisma.sendBatch.findUniqueOrThrow({ where: { id: claimed.batchId } }))
+        .trackingSnapshot;
+      provider.mode = "accepted";
+      await executeReservedBatch(fixture.campaign.id, claimed.batchId);
+      expect(
+        await prisma.campaignRecipient.findUniqueOrThrow({
+          where: { id: fixture.recipients[0]!.id },
+        })
+      ).toMatchObject({ clickTrackingEnabled: enabled, openTrackingEnabled: false });
+      expect(
+        await prisma.sendBatch.findUniqueOrThrow({ where: { id: claimed.batchId } })
+      ).toMatchObject({ trackingSnapshot: frozen, trackingCoverageUncertain: false });
+      expect(provider.calls).toBe(2);
+    }
+  );
+
+  it("keeps retry coverage unknown after an unavailable observation even if settings recover", async () => {
+    class RecoveringTrackingProvider extends FakeEmailProvider {
+      unavailable = false;
+      async getDomainTracking(domain: string) {
+        if (this.unavailable) throw new Error("temporary observation failure");
+        return {
+          providerDomainId: "recovering-domain",
+          domain,
+          openTrackingEnabled: false,
+          clickTrackingEnabled: true,
+          trackingDomain: `links.${domain}`,
+          trackingVerified: true,
+        };
+      }
+    }
+    const provider = new RecoveringTrackingProvider();
+    setEmailProviderForTest(provider);
+    await prisma.providerDomainTracking.deleteMany({ where: { domain: "example.com" } });
+    const fixture = await createFixture(1);
+    const claimed = await reserveAll(fixture);
+    provider.mode = "temporary";
+    await executeReservedBatch(fixture.campaign.id, claimed.batchId);
+    const frozen = (await prisma.sendBatch.findUniqueOrThrow({ where: { id: claimed.batchId } }))
+      .trackingSnapshot;
+    provider.unavailable = true;
+    await executeReservedBatch(fixture.campaign.id, claimed.batchId);
+    provider.unavailable = false;
+    await observeDomainTracking(fixture.sender.provider, "example.com", true);
+    provider.mode = "accepted";
+    await executeReservedBatch(fixture.campaign.id, claimed.batchId);
+    expect(
+      await prisma.campaignRecipient.findUniqueOrThrow({ where: { id: fixture.recipients[0]!.id } })
+    ).toMatchObject({ clickTrackingEnabled: null, openTrackingEnabled: null });
+    expect(
+      await prisma.sendBatch.findUniqueOrThrow({ where: { id: claimed.batchId } })
+    ).toMatchObject({ trackingSnapshot: frozen, trackingCoverageUncertain: true });
+  });
+
+  it("keeps historical acceptance and partial click denominators in the persisted report", async () => {
+    const f = await createFixture(5);
+    const at = new Date("2026-09-22T13:00:00Z");
+    await prisma.campaignRecipient.updateMany({
+      where: { campaignId: f.campaign.id },
+      data: { sendState: "ACCEPTED", acceptedAt: at },
+    });
+    await prisma.campaignRecipient.update({
+      where: { id: f.recipients[0]!.id },
+      data: { clickTrackingEnabled: true, deliveredAt: at, listingClickedAt: at },
+    });
+    await prisma.campaignRecipient.update({
+      where: { id: f.recipients[1]!.id },
+      data: { clickTrackingEnabled: true, listingClickedAt: at },
+    });
+    await prisma.campaignRecipient.update({
+      where: { id: f.recipients[2]!.id },
+      data: { clickTrackingEnabled: false, deliveredAt: at },
+    });
+    await prisma.campaignRecipient.update({
+      where: { id: f.recipients[3]!.id },
+      data: { sendState: "PERMANENT_FAILED", deliveredAt: at },
+    });
+    await prisma.campaignRecipient.update({
+      where: { id: f.recipients[4]!.id },
+      data: {
+        deliveredAt: at,
+        bouncedAt: at,
+        bounceType: "Transient",
+        deliveryState: "COMPLAINED",
+        complainedAt: at,
+      },
+    });
+    const result = await recomputeCampaignStats(f.campaign.id);
+    expect(result.reporting.delivery).toMatchObject({
+      targetCount: 5,
+      acceptedCount: 5,
+      deliveredCount: 2,
+      pendingCount: 1,
+      undeliveredCount: 2,
+      bounce: { transientCount: 1 },
+    });
+    expect(result.reporting.clicks).toMatchObject({
+      availability: "partial",
+      count: 2,
+      rate: 1,
+      coverageSentCount: 2,
+      coverageDeliveredCount: 1,
+      untrackedSentCount: 1,
+      unknownSentCount: 2,
+    });
+    expect(
+      (await prisma.campaign.findUniqueOrThrow({ where: { id: f.campaign.id } })).reportingSummary
+    ).toEqual(result.reporting);
+  });
+
   it("persists partial provider acceptance and releases only rejected quota", async () => {
     const fixture = await createFixture(2);
     const claimed = await reserveAll(fixture);
@@ -2102,7 +2287,7 @@ describe("PostgreSQL delivery invariants", () => {
           providerEmailId: recipient.resendEmailId,
           eventCreatedAt: new Date(),
           campaignRecipientId: recipient.id,
-          payload: {},
+          payload: eventType === "email.bounced" ? { data: { bounce: { type: "Permanent" } } } : {},
         },
       });
 
@@ -2115,7 +2300,7 @@ describe("PostgreSQL delivery invariants", () => {
           providerEmailId: recipient.resendEmailId,
           eventCreatedAt: new Date(Date.now() + 60_000),
           campaignRecipientId: recipient.id,
-          payload: {},
+          payload: eventType === "email.bounced" ? { data: { bounce: { type: "Permanent" } } } : {},
         },
       });
       await processWebhookEvent(repeated.id);
