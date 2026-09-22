@@ -134,6 +134,9 @@ export function HomePage() {
                         : ""}
                     </small>
                     {item.listAgentFullName ? <p>Listing agent: {item.listAgentFullName}</p> : null}
+                    {item.coListAgentFullName ? (
+                      <p>Co-listing agent: {item.coListAgentFullName}</p>
+                    ) : null}
                     <p>
                       {item.city}, {item.stateCode} {item.postalCode}
                     </p>

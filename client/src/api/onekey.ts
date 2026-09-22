@@ -14,6 +14,9 @@ export type OneKeySearchResult = {
   propertyType?: string | null;
   transactionType?: string | null;
   listAgentFullName?: string | null;
+  coListAgentFullName?: string;
+  coListAgentMlsId?: string;
+  coListOfficeName?: string;
   imageUrls?: string[];
 };
 

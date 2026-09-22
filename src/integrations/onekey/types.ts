@@ -15,6 +15,12 @@ export interface OneKeyListing {
   livingArea?: number;
   yearBuilt?: number;
   publicRemarks?: string;
+  coListAgentKey?: string;
+  coListAgentMlsId?: string;
+  coListAgentFullName?: string;
+  coListOfficeKey?: string;
+  coListOfficeMlsId?: string;
+  coListOfficeName?: string;
   listAgentFullName?: string;
   listOfficeName?: string;
   modificationTimestamp?: string;

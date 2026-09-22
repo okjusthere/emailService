@@ -3,6 +3,7 @@ import { FakeAiProvider } from "../../src/integrations/ai/FakeAiProvider.js";
 import { OpenAiCopyProvider } from "../../src/integrations/ai/OpenAiCopyProvider.js";
 import { BboOneKeyProvider } from "../../src/integrations/onekey/BboOneKeyProvider.js";
 import {
+  coListingFields,
   normalizeAddress,
   normalizeOneKeyListing,
 } from "../../src/integrations/onekey/normalize.js";
@@ -180,4 +181,32 @@ describe("AI provider boundary", () => {
       provider.generateListing({ tone: "concise", facts: { address: "Verified address" } })
     ).resolves.toMatchObject({ title: "Verified title" });
   });
+});
+
+it("retains co-listing identity independently of the selected email sender", () => {
+  const item = normalizeOneKeyListing({
+    listingKey: "CO-1",
+    listAgentFullName: "Primary",
+    coListAgentKey: "KEY-2",
+    coListAgentMlsId: "MLS-2",
+    coListAgentFullName: "Second",
+    coListOfficeKey: "OFF-2",
+    coListOfficeMlsId: "OFFMLS-2",
+    coListOfficeName: "Second Firm",
+  });
+  expect(item.coListAgentMlsId).toBe("MLS-2");
+  expect(item.coListOfficeName).toBe("Second Firm");
+  expect(item.listAgentFullName).toBe("Primary");
+  expect(normalizeOneKeyListing({ listingKey: "SOLO" }).coListAgentKey).toBeUndefined();
+});
+
+it("restores co-listing facts from cached sourceSnapshot without projecting unrelated raw fields", () => {
+  expect(
+    coListingFields({
+      coListAgentMlsId: "SECOND",
+      coListOfficeName: "Other Firm",
+      secret: "not a listing fact",
+    })
+  ).toEqual({ coListAgentMlsId: "SECOND", coListOfficeName: "Other Firm" });
+  expect(coListingFields(null)).toEqual({});
 });
