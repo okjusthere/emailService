@@ -15,6 +15,7 @@ const fake = vi.hoisted(() => ({
   testSend: vi.fn(),
   publish: vi.fn(),
   transition: vi.fn(),
+  systemSetting: vi.fn(),
 }));
 vi.mock("../../src/db/prisma.js", () => {
   const tx = {
@@ -27,6 +28,7 @@ vi.mock("../../src/db/prisma.js", () => {
       ...tx,
       $transaction: (fn: (value: unknown) => unknown) => fn(tx),
       campaign: { findFirst: fake.findFirst, findMany: fake.findMany },
+      systemSetting: { findUnique: fake.systemSetting },
     },
   };
 });
@@ -51,6 +53,7 @@ vi.mock("../../src/modules/ai/service.js", () => ({
 import { homixRouter } from "../../src/web/routes/homix.js";
 import { errorHandler } from "../../src/shared/errors.js";
 import { config } from "../../src/config/index.js";
+import { buildCampaignReporting } from "../../src/modules/analytics/reporting.js";
 const mutableConfig = config as {
   deliveryMode: "disabled" | "sandbox" | "live";
   testAllowlist: string[];
@@ -127,6 +130,7 @@ describe("Portal receiver ownership boundary", () => {
     fake.userUpdate.mockResolvedValue(user);
     fake.findFirst.mockResolvedValue(null);
     fake.findMany.mockResolvedValue([]);
+    fake.systemSetting.mockResolvedValue(null);
   });
   afterEach(() => {
     mutableConfig.deliveryMode = originalMode;
@@ -208,6 +212,60 @@ describe("Portal receiver ownership boundary", () => {
         where: { id, sourceApplication: "homixliving", deletedAt: null, portalOwnerAgentId: 42 },
       })
     );
+  });
+  it("does not read reporting or global state before campaign ownership is established", async () => {
+    const path = `/campaigns/${id}/stats`;
+    await request(app)
+      .get(prefix + path)
+      .set("Authorization", `Bearer ${token("GET", path, undefined)}`)
+      .expect(404);
+    expect(fake.systemSetting).not.toHaveBeenCalled();
+  });
+  it("returns null reporting for an older campaign without claiming engagement is zero", async () => {
+    fake.findFirst.mockResolvedValue({
+      id,
+      status: "SENDING",
+      senderProfile: { fromEmail: "listings@example.com" },
+      openedCount: 0,
+      clickedCount: 0,
+      reportingSummary: null,
+    });
+    const path = `/campaigns/${id}/stats`;
+    const response = await request(app)
+      .get(prefix + path)
+      .set("Authorization", `Bearer ${token("GET", path, undefined)}`)
+      .expect(200);
+    expect(response.body.campaign).toMatchObject({
+      reporting: null,
+      stats: { openedCount: 0, clickedCount: 0 },
+    });
+  });
+  it("exposes the persisted coverage report with current sending state and global pause", async () => {
+    const reporting = buildCampaignReporting([], new Date("2026-09-22T13:00:00Z"));
+    fake.findFirst.mockResolvedValue({
+      id,
+      status: "COMPLETED",
+      scheduledAt: null,
+      senderProfile: { fromEmail: "listings@example.com" },
+      reportingSummary: reporting,
+      statsComputedAt: new Date(reporting.asOf),
+    });
+    fake.systemSetting.mockResolvedValue({ value: true });
+    const path = `/campaigns/${id}/stats`;
+    const response = await request(app)
+      .get(prefix + path)
+      .set("Authorization", `Bearer ${token("GET", path, undefined)}`)
+      .expect(200);
+    expect(response.body).toMatchObject({
+      globalPause: true,
+      campaign: {
+        statsComputedAt: reporting.asOf,
+        reporting: {
+          ...reporting,
+          sending: { state: "completed", nextSendAt: null, estimateKind: null },
+        },
+      },
+    });
   });
   it.each(["preview", "test", "publish", "pause", "resume", "cancel", "nearby", "ai", "ai-apply"])(
     "checks ownership before %s",

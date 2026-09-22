@@ -4,6 +4,7 @@ import { inTransaction } from "../../db/transactions.js";
 import { DomainError } from "../../shared/errors.js";
 import type { ActorContext } from "../audit/service.js";
 import { writeAudit } from "../audit/service.js";
+import { parseTrackingSnapshot } from "../tracking/domain.js";
 
 export const manualReviewActions = [
   "MARK_ACCEPTED",
@@ -97,6 +98,13 @@ export async function resolveManualReview(
         createdByUserId: actor.userId,
       },
     });
+    const tracking = parseTrackingSnapshot(batch.trackingSnapshot);
+    const coverage = {
+      clickTrackingEnabled: tracking?.clickTrackingEnabled ?? null,
+      openTrackingEnabled: tracking?.openTrackingEnabled ?? null,
+      trackingCheckedAt: tracking?.checkedAt ? new Date(tracking.checkedAt) : null,
+      trackingRevision: tracking?.revision ?? null,
+    };
 
     if (releaseQuota > 0) {
       await tx.$executeRaw(
@@ -113,7 +121,7 @@ export async function resolveManualReview(
       case "MARK_ACCEPTED":
         await tx.campaignRecipient.updateMany({
           where: { sendBatchId: batch.id, sendState: "MANUAL_REVIEW" },
-          data: { sendState: "ACCEPTED", acceptedAt: new Date(), lastErrorCode: null },
+          data: { sendState: "ACCEPTED", acceptedAt: new Date(), lastErrorCode: null, ...coverage },
         });
         await tx.sendBatch.update({
           where: { id: batch.id },
@@ -154,6 +162,7 @@ export async function resolveManualReview(
             resendEmailId: input.providerEmailId,
             sendState: "ACCEPTED",
             acceptedAt: new Date(),
+            ...coverage,
             lastErrorCode: null,
           },
         });

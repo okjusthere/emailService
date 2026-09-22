@@ -13,6 +13,8 @@ import { logger } from "../../shared/logger.js";
 import { recomputeCampaignStats } from "../analytics/service.js";
 import { effectiveDailyLimit, isInsideSendWindow, localDate, nextSendWindow } from "./quota.js";
 import { canRetry, classifyProviderFailure, retryDelayMs } from "./retry.js";
+import { observeDomainTracking } from "../tracking/service.js";
+import { parseTrackingSnapshot, unknownTrackingSnapshot } from "../tracking/domain.js";
 
 interface DispatchPayload {
   campaignId: string;
@@ -128,6 +130,8 @@ async function finishBatch(input: {
   outcome: "ACCEPTED" | "PARTIAL" | "PERMANENT_FAILED";
 }) {
   await prisma.$transaction(async (tx) => {
+    const batch = await tx.sendBatch.findUniqueOrThrow({ where: { id: input.batchId } });
+    const tracking = parseTrackingSnapshot(batch.trackingSnapshot);
     let accepted = 0;
     let released = 0;
     for (const item of input.items) {
@@ -139,6 +143,10 @@ async function finishBatch(input: {
             sendState: "ACCEPTED",
             resendEmailId: item.providerEmailId,
             acceptedAt: new Date(),
+            clickTrackingEnabled: tracking?.clickTrackingEnabled ?? null,
+            openTrackingEnabled: tracking?.openTrackingEnabled ?? null,
+            trackingCheckedAt: tracking?.checkedAt ? new Date(tracking.checkedAt) : null,
+            trackingRevision: tracking?.revision ?? null,
             attemptCount: { increment: 1 },
             claimToken: null,
             claimExpiresAt: null,
@@ -264,6 +272,18 @@ async function executeBatch(
     }
   }
   recipients = deliverable;
+  const sendingDomain = snapshot(campaign.contentSnapshot)
+    .sender.fromEmail.split("@")
+    .at(-1)!
+    .toLowerCase();
+  const existingBatch = await prisma.sendBatch.findUniqueOrThrow({ where: { id: batchId } });
+  // A retried legacy batch may already exist at the provider. Never assign it
+  // today's settings or replace the snapshot associated with its idempotency key.
+  const tracking =
+    parseTrackingSnapshot(existingBatch.trackingSnapshot) ??
+    (existingBatch.attemptCount > 0
+      ? unknownTrackingSnapshot(campaign.senderProfile.provider, sendingDomain)
+      : await observeDomainTracking(campaign.senderProfile.provider, sendingDomain));
   const preparedAttempt = await inTransaction(async (tx) => {
     await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id FROM send_batches WHERE id = ${batchId}::uuid FOR UPDATE
@@ -286,6 +306,7 @@ async function executeBatch(
         status: "SUBMITTING",
         attemptCount: attemptNumber,
         startedAt: batch.startedAt ?? new Date(),
+        trackingSnapshot: batch.trackingSnapshot ?? (tracking as unknown as Prisma.InputJsonValue),
       },
     });
     return { batch, attempt, attemptNumber };

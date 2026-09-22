@@ -4,13 +4,15 @@ import { normalizeEmail } from "../../shared/normalize.js";
 import { logger } from "../../shared/logger.js";
 
 const severity: Record<SuppressionReason, number> = {
-  COMPLAINT: 7,
-  UNSUBSCRIBE: 6,
-  HARD_BOUNCE: 5,
-  PROVIDER_SUPPRESSED: 4,
+  COMPLAINT: 9,
+  UNSUBSCRIBE: 8,
+  HARD_BOUNCE: 7,
+  PROVIDER_SUPPRESSED: 6,
+  INVALID_ADDRESS: 5,
+  MANUAL: 4,
   LEGACY_BOUNCE_REVIEW: 3,
-  INVALID_ADDRESS: 2,
-  MANUAL: 1,
+  BOUNCE_REVIEW: 2,
+  SOFT_BOUNCE: 1,
 };
 
 export function stricterSuppression(
@@ -34,21 +36,25 @@ export async function upsertSuppression(
   const emailNormalized = normalizeEmail(input.email);
   const incomingIsAtLeastAsStrict = Prisma.sql`
     (CASE EXCLUDED.reason
-      WHEN 'COMPLAINT'::"SuppressionReason" THEN 7
-      WHEN 'UNSUBSCRIBE'::"SuppressionReason" THEN 6
-      WHEN 'HARD_BOUNCE'::"SuppressionReason" THEN 5
-      WHEN 'PROVIDER_SUPPRESSED'::"SuppressionReason" THEN 4
+      WHEN 'COMPLAINT'::"SuppressionReason" THEN 9
+      WHEN 'UNSUBSCRIBE'::"SuppressionReason" THEN 8
+      WHEN 'HARD_BOUNCE'::"SuppressionReason" THEN 7
+      WHEN 'PROVIDER_SUPPRESSED'::"SuppressionReason" THEN 6
+      WHEN 'INVALID_ADDRESS'::"SuppressionReason" THEN 5
+      WHEN 'MANUAL'::"SuppressionReason" THEN 4
       WHEN 'LEGACY_BOUNCE_REVIEW'::"SuppressionReason" THEN 3
-      WHEN 'INVALID_ADDRESS'::"SuppressionReason" THEN 2
+      WHEN 'BOUNCE_REVIEW'::"SuppressionReason" THEN 2
       ELSE 1
     END) >=
     (CASE suppressions.reason
-      WHEN 'COMPLAINT'::"SuppressionReason" THEN 7
-      WHEN 'UNSUBSCRIBE'::"SuppressionReason" THEN 6
-      WHEN 'HARD_BOUNCE'::"SuppressionReason" THEN 5
-      WHEN 'PROVIDER_SUPPRESSED'::"SuppressionReason" THEN 4
+      WHEN 'COMPLAINT'::"SuppressionReason" THEN 9
+      WHEN 'UNSUBSCRIBE'::"SuppressionReason" THEN 8
+      WHEN 'HARD_BOUNCE'::"SuppressionReason" THEN 7
+      WHEN 'PROVIDER_SUPPRESSED'::"SuppressionReason" THEN 6
+      WHEN 'INVALID_ADDRESS'::"SuppressionReason" THEN 5
+      WHEN 'MANUAL'::"SuppressionReason" THEN 4
       WHEN 'LEGACY_BOUNCE_REVIEW'::"SuppressionReason" THEN 3
-      WHEN 'INVALID_ADDRESS'::"SuppressionReason" THEN 2
+      WHEN 'BOUNCE_REVIEW'::"SuppressionReason" THEN 2
       ELSE 1
     END)
   `;
@@ -85,6 +91,24 @@ export async function upsertSuppression(
       updated_at = now()
   `);
   const suppression = await tx.suppression.findUniqueOrThrow({ where: { emailNormalized } });
+  // The effective reason is a priority projection, not a replacement for cause
+  // history. Record even weaker incoming causes so a later release can review all
+  // complaints, unsubscribes, bounces and administrator decisions for this address.
+  await tx.auditLog.create({
+    data: {
+      action: "suppression.cause_recorded",
+      entityType: "suppression",
+      entityId: suppression.id,
+      after: {
+        reason: input.reason,
+        source: input.source,
+        effectiveReason: suppression.reason,
+        campaignId: input.campaignId ?? null,
+        campaignRecipientId: input.campaignRecipientId ?? null,
+        details: input.details ?? null,
+      },
+    },
+  });
   logger.info(
     {
       event: "suppression_created",

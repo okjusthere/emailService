@@ -24,7 +24,46 @@ tags:
   - { name: OneKey }
   - { name: AI }
   - { name: Public }
+  - { name: Portal }
 paths:
+  /api/integrations/homix/v1/campaigns/{id}/stats:
+    servers: [{ url: / }]
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      tags: [Portal, Analytics]
+      operationId: getPortalCampaignStats
+      summary: Read the owned campaign report and current sending state
+      description: >-
+        Uses the signed Portal identity and campaign ownership scope. A null reporting value means
+        the new report has not been computed; legacy numeric zeros do not establish engagement
+        tracking availability. Historical coverage comes from each accepted message, never the
+        sender's current preferences. Counts are a persisted snapshot and sending is evaluated
+        when the response is read.
+      security: [{ portalBearerAuth: [] }]
+      responses:
+        "200":
+          description: Owned campaign reporting snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [campaign, globalPause]
+                properties:
+                  globalPause: { type: boolean }
+                  campaign:
+                    type: object
+                    required: [id, stats, reporting]
+                    additionalProperties: true
+                    properties:
+                      id: { type: string, format: uuid }
+                      stats: { $ref: "#/components/schemas/CampaignLegacyStats" }
+                      statsComputedAt: { type: [string, "null"], format: date-time }
+                      reporting:
+                        oneOf:
+                          - $ref: "#/components/schemas/CampaignReporting"
+                          - { type: "null" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /auth/me:
     get:
       {
@@ -672,15 +711,58 @@ paths:
         tags: [Senders],
         operationId: listSenderProfiles,
         summary: List sender policies and verification state,
-        responses: { "200": { $ref: "#/components/responses/Collection" } },
+        description: "Tracking is managed on the provider sending domain and shared by every sender on that domain. Returned openTrackingEnabled/clickTrackingEnabled are effective observed values, including null when configuration is stale, unverified or unavailable; they are not editable sender preferences. Tracking observation reads use a bounded cache.",
+        responses:
+          {
+            "200":
+              {
+                description: Sender policies with observed tracking capability,
+                content:
+                  {
+                    application/json:
+                      {
+                        schema:
+                          {
+                            type: object,
+                            properties:
+                              {
+                                items:
+                                  {
+                                    type: array,
+                                    items:
+                                      {
+                                        type: object,
+                                        additionalProperties: true,
+                                        properties:
+                                          {
+                                            openTrackingEnabled: { type: [boolean, "null"] },
+                                            clickTrackingEnabled: { type: [boolean, "null"] },
+                                            tracking:
+                                              {
+                                                $ref: "#/components/schemas/DomainTrackingObservation",
+                                              },
+                                          },
+                                      },
+                                  },
+                              },
+                          },
+                      },
+                  },
+              },
+          },
       }
     post:
       {
         tags: [Senders],
         operationId: createSenderProfile,
         summary: Create an unverified sender policy,
-        requestBody: { $ref: "#/components/requestBodies/JsonBody" },
-        responses: { "201": { $ref: "#/components/responses/Success" } },
+        description: "ADMIN only. openTrackingEnabled and clickTrackingEnabled are not sender-level controls. Supplying either boolean returns 409 TRACKING_MANAGED_BY_PROVIDER_DOMAIN. Configure the sending domain in the provider first, then refresh the observed configuration.",
+        requestBody: { $ref: "#/components/requestBodies/SenderPolicyBody" },
+        responses:
+          {
+            "201": { $ref: "#/components/responses/Success" },
+            "409": { $ref: "#/components/responses/Error" },
+          },
       }
   /sender-profiles/{id}:
     parameters: [{ $ref: "#/components/parameters/Id" }]
@@ -689,8 +771,13 @@ paths:
         tags: [Senders],
         operationId: updateSenderProfile,
         summary: Update sender windows quota or warm-up,
-        requestBody: { $ref: "#/components/requestBodies/JsonBody" },
-        responses: { "200": { $ref: "#/components/responses/Success" } },
+        description: "ADMIN only. Supplying openTrackingEnabled or clickTrackingEnabled returns 409 TRACKING_MANAGED_BY_PROVIDER_DOMAIN, even when the value matches current provider state. Tracking applies to the sending domain and cannot be toggled on an individual sender.",
+        requestBody: { $ref: "#/components/requestBodies/SenderPolicyBody" },
+        responses:
+          {
+            "200": { $ref: "#/components/responses/Success" },
+            "409": { $ref: "#/components/responses/Error" },
+          },
       }
     delete:
       {
@@ -719,6 +806,29 @@ paths:
         requestBody: { $ref: "#/components/requestBodies/JsonBody" },
         responses: { "200": { $ref: "#/components/responses/Success" } },
       }
+  /sender-profiles/{id}/tracking/refresh:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      tags: [Senders]
+      operationId: refreshSenderDomainTracking
+      summary: Refresh observed provider-domain tracking configuration
+      description: >-
+        ADMIN only. Reads the provider's settings for the domain of the sender's actual From
+        address and persists a shared observation. This does not enable tracking, change DNS,
+        send an email, or revise historical recipient tracking snapshots. Verified fresh
+        capability is true, explicit disabled configuration is false, and unavailable/stale/
+        unverified state is null. A bounded refresh lease may return another in-progress read.
+      responses:
+        "200":
+          description: Effective tracking observation for the sending domain
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tracking]
+                properties:
+                  tracking: { $ref: "#/components/schemas/DomainTrackingObservation" }
+        "403": { $ref: "#/components/responses/Error" }
   /sender-profiles/{id}/suspend:
     parameters: [{ $ref: "#/components/parameters/Id" }]
     post:
@@ -951,7 +1061,34 @@ paths:
         tags: [Analytics],
         operationId: getCampaignStats,
         summary: Recompute and return campaign aggregates,
-        responses: { "200": { $ref: "#/components/responses/Success" } },
+        responses:
+          {
+            "200":
+              {
+                description: Compatibility aggregates and coverage-aware report,
+                content:
+                  {
+                    application/json:
+                      {
+                        schema:
+                          {
+                            allOf:
+                              [
+                                { $ref: "#/components/schemas/CampaignLegacyStats" },
+                                {
+                                  type: object,
+                                  required: [reporting],
+                                  properties:
+                                    {
+                                      reporting: { $ref: "#/components/schemas/CampaignReporting" },
+                                    },
+                                },
+                              ],
+                          },
+                      },
+                  },
+              },
+          },
       }
   /product-events:
     post:
@@ -1312,6 +1449,11 @@ paths:
       }
 components:
   securitySchemes:
+    portalBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Short-lived signed Portal identity bound to HTTP method, path and request body.
     cookieAuth:
       {
         type: apiKey,
@@ -1496,6 +1638,11 @@ components:
         description: Stable client action key required to safely retry a composer action.,
       }
   requestBodies:
+    SenderPolicyBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/SenderPolicyInput" }
     JsonBody:
       {
         required: true,
@@ -1527,6 +1674,181 @@ components:
           },
       }
   schemas:
+    DomainTrackingObservation:
+      type: object
+      required:
+        [
+          version,
+          provider,
+          domain,
+          revision,
+          checkedAt,
+          openTrackingEnabled,
+          clickTrackingEnabled,
+          trackingDomain,
+          managedBy,
+        ]
+      properties:
+        version: { type: integer, const: 1 }
+        provider: { type: string }
+        domain: { type: string }
+        revision: { type: [string, "null"] }
+        checkedAt: { type: [string, "null"], format: date-time }
+        openTrackingEnabled: { type: [boolean, "null"] }
+        clickTrackingEnabled: { type: [boolean, "null"] }
+        trackingDomain: { type: [string, "null"] }
+        managedBy: { type: string, const: provider-domain }
+    SenderPolicyInput:
+      type: object
+      additionalProperties: true
+      description: Sender policy fields; provider-domain tracking capabilities are read-only.
+      not:
+        anyOf:
+          - properties: { openTrackingEnabled: {} }
+            required: [openTrackingEnabled]
+          - properties: { clickTrackingEnabled: {} }
+            required: [clickTrackingEnabled]
+    CampaignLegacyStats:
+      type: object
+      description: >-
+        Compatibility counts retain event-history semantics and may overlap. acceptedCount uses
+        immutable acceptedAt (or legacy ACCEPTED state). Use reporting for disjoint outcomes and
+        tracking availability; legacy openedCount/clickedCount equal to zero do not mean no reader.
+      properties:
+        targetCount: { type: integer, minimum: 0 }
+        eligibleCount: { type: integer, minimum: 0 }
+        suppressedCount: { type: integer, minimum: 0 }
+        acceptedCount: { type: integer, minimum: 0 }
+        deliveredCount: { type: integer, minimum: 0 }
+        openedCount: { type: integer, minimum: 0 }
+        clickedCount: { type: integer, minimum: 0 }
+        bouncedCount: { type: integer, minimum: 0 }
+        complainedCount: { type: integer, minimum: 0 }
+        failedCount: { type: integer, minimum: 0 }
+    EngagementReporting:
+      type: object
+      required:
+        [
+          availability,
+          count,
+          rate,
+          coverageSentCount,
+          coverageDeliveredCount,
+          untrackedSentCount,
+          unknownSentCount,
+          startedAt,
+          asOf,
+        ]
+      properties:
+        availability:
+          type: string
+          enum: [disabled, unknown, active, partial]
+          description: "disabled means all accepted messages explicitly had tracking off; unknown includes missing historical snapshots or no accepted messages; active covers every accepted message; partial covers a proper subset. This describes historical message coverage, not the provider's current configuration or current webhook health."
+        count:
+          type: [integer, "null"]
+          minimum: 0
+          description: "Unique tracked accepted recipient messages with an engagement event. Clicks count classified listing CTA events only. Null when there is no known tracked cohort. Zero is reserved for an observed tracked cohort without recorded engagement."
+        rate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+          description: "Engaged messages with historical delivery receipts divided by delivered messages in the same tracked cohort. Clicks without delivery receipts remain in count but are excluded from the rate until delivery is confirmed. Null for a zero denominator."
+        coverageSentCount: { type: integer, minimum: 0 }
+        coverageDeliveredCount: { type: integer, minimum: 0 }
+        untrackedSentCount: { type: integer, minimum: 0 }
+        unknownSentCount: { type: integer, minimum: 0 }
+        startedAt:
+          type: [string, "null"]
+          format: date-time
+          description: First accepted tracked message in this campaign; coverage need not be contiguous.
+        asOf: { type: string, format: date-time }
+    CampaignReporting:
+      type: object
+      required: [version, asOf, delivery, clicks, opens]
+      properties:
+        version: { type: integer, const: 1 }
+        asOf: { type: string, format: date-time }
+        delivery:
+          type: object
+          description: >-
+            acceptedCount = deliveredCount + pendingCount + undeliveredCount.
+            targetCount = acceptedCount + pendingSendCount + failedBeforeSendCount + excludedCount
+            + cancelledCount + manualReviewCount. Historical bounce/provider suppression or
+            permanent send failure takes precedence over a prior delivery receipt. Complaint
+            and unsubscribe are separate facts and do not themselves subtract a delivery.
+          required:
+            [
+              targetCount,
+              acceptedCount,
+              deliveredCount,
+              pendingCount,
+              undeliveredCount,
+              pendingSendCount,
+              failedBeforeSendCount,
+              excludedCount,
+              cancelledCount,
+              manualReviewCount,
+              bounce,
+              suppressionReasons,
+            ]
+          properties:
+            targetCount: { type: integer, minimum: 0 }
+            acceptedCount: { type: integer, minimum: 0 }
+            deliveredCount: { type: integer, minimum: 0 }
+            pendingCount: { type: integer, minimum: 0 }
+            undeliveredCount: { type: integer, minimum: 0 }
+            pendingSendCount: { type: integer, minimum: 0 }
+            failedBeforeSendCount: { type: integer, minimum: 0 }
+            excludedCount: { type: integer, minimum: 0 }
+            cancelledCount: { type: integer, minimum: 0 }
+            manualReviewCount: { type: integer, minimum: 0 }
+            bounce:
+              type: object
+              required: [permanentCount, transientCount, undeterminedCount]
+              properties:
+                permanentCount: { type: integer, minimum: 0 }
+                transientCount: { type: integer, minimum: 0 }
+                undeterminedCount: { type: integer, minimum: 0 }
+            suppressionReasons:
+              type: array
+              items:
+                type: object
+                required: [reason, count]
+                properties:
+                  reason: { type: string }
+                  count: { type: integer, minimum: 0 }
+        clicks: { $ref: "#/components/schemas/EngagementReporting" }
+        opens:
+          allOf: [{ $ref: "#/components/schemas/EngagementReporting" }]
+          description: Approximate opening signals for diagnostics; never a true reader count.
+        sending:
+          type: object
+          description: Dynamic Portal read-time state. Global pause is returned separately and overrides this state.
+          required: [state, nextSendAt, estimateKind]
+          properties:
+            state:
+              type: string
+              enum:
+                [
+                  draft,
+                  ready,
+                  preparing,
+                  scheduled,
+                  sending,
+                  waiting_window,
+                  waiting_cadence,
+                  paused,
+                  blocked,
+                  completed,
+                  cancelled,
+                  failed,
+                  archived,
+                ]
+            nextSendAt: { type: [string, "null"], format: date-time }
+            estimateKind:
+              type: [string, "null"]
+              enum: [earliest_possible, null]
+              description: Next eligible time only; shared queue load, daily quota and retries may delay delivery.
     AnyObject: { type: object, additionalProperties: true }
     Error:
       type: object

@@ -47,6 +47,8 @@ export function CampaignDetailPage() {
     );
   if (campaign.data.status === "DRAFT") return <Navigate to={`/campaigns/${id}/edit`} replace />;
   const item = campaign.data;
+  const report = item.reportingSummary;
+  const clicks = report?.clicks;
   return (
     <main className="simple-page campaign-detail-page">
       <Link className="back-link" to="/campaigns">
@@ -95,22 +97,47 @@ export function CampaignDetailPage() {
           <strong>{(item.eligibleCount ?? 0).toLocaleString()}</strong>
         </article>
         <article>
-          <span>Accepted</span>
-          <strong>{(item.acceptedCount ?? 0).toLocaleString()}</strong>
+          <span>Sent</span>
+          <strong>
+            {(report?.delivery.acceptedCount ?? item.acceptedCount ?? 0).toLocaleString()}
+          </strong>
         </article>
         <article>
-          <span>Delivered</span>
-          <strong>{(item.deliveredCount ?? 0).toLocaleString()}</strong>
+          <span title="Accepted by the recipient's mail server; this does not confirm inbox placement or reading.">
+            Delivered
+          </span>
+          <strong>{report?.delivery.deliveredCount.toLocaleString() ?? "—"}</strong>
         </article>
         <article>
-          <span>Clicked</span>
-          <strong>{(item.clickedCount ?? 0).toLocaleString()}</strong>
+          <span>Awaiting delivery confirmation</span>
+          <strong>{report?.delivery.pendingCount.toLocaleString() ?? "—"}</strong>
         </article>
         <article>
-          <span>Bounced</span>
-          <strong>{(item.bouncedCount ?? 0).toLocaleString()}</strong>
+          <span>Delivery issues</span>
+          <strong>{report?.delivery.undeliveredCount.toLocaleString() ?? "—"}</strong>
+        </article>
+        <article>
+          <span>Listing link clicks</span>
+          <strong>{clicks?.count?.toLocaleString() ?? "—"}</strong>
         </article>
       </section>
+      <p>
+        {!clicks || clicks.availability === "unknown"
+          ? "Click tracking coverage is unavailable for this activity. Missing data does not mean nobody viewed the listing."
+          : clicks.availability === "disabled"
+            ? "Click tracking was not enabled for these messages."
+            : clicks.availability === "partial"
+              ? `Click tracking covers ${clicks.coverageSentCount.toLocaleString()} sent messages${clicks.startedAt ? `, beginning ${formatEt(clicks.startedAt)}` : ""}. Earlier or untracked messages are excluded.`
+              : clicks.count === 0
+                ? "No listing link clicks have been recorded yet."
+                : "Listing link clicks are counted once per recipient message; they do not prove a person read the email."}
+      </p>
+      {report ? (
+        <p>
+          Updated {formatEt(report.asOf)}. Delivery and click events may arrive after sending
+          completes.
+        </p>
+      ) : null}
       <section className="detail-grid">
         <article className="panel-simple">
           <span className="eyebrow">Email</span>

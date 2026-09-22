@@ -5,6 +5,7 @@ import type {
   ProviderBatchResult,
   ProviderItemResult,
   ProviderMessage,
+  ProviderDomainObservation,
   VerifiedWebhookEvent,
 } from "./EmailProvider.js";
 
@@ -38,12 +39,75 @@ function mapMessage(message: ProviderMessage) {
 export class ResendEmailProvider implements EmailProvider {
   private readonly client: Resend;
   constructor(
-    apiKey: string,
+    private readonly apiKey: string,
     private readonly webhookSecret: string,
     private readonly previousSecret = "",
     private readonly previousExpiresAt = ""
   ) {
     this.client = new Resend(apiKey);
+  }
+
+  async getDomainTracking(
+    domain: string,
+    providerDomainId?: string
+  ): Promise<ProviderDomainObservation> {
+    // Configuration must never block delivery indefinitely. The sending SDK does
+    // not expose an abort signal for its domains methods, so these reads are bounded.
+    const signal = AbortSignal.timeout(8_000);
+    const read = async (path: string): Promise<unknown> => {
+      const response = await fetch(`https://api.resend.com${path}`, {
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+        signal,
+      });
+      if (!response.ok) throw new Error(`Provider domain read failed (${response.status})`);
+      return response.json();
+    };
+    let id = providerDomainId;
+    if (!id) {
+      let after: string | undefined;
+      for (let page = 0; page < 20 && !id; page += 1) {
+        const list = z
+          .object({
+            data: z.array(z.object({ id: z.string(), name: z.string() })),
+            has_more: z.boolean().optional(),
+          })
+          .parse(
+            await read(`/domains?limit=100${after ? `&after=${encodeURIComponent(after)}` : ""}`)
+          );
+        id = list.data.find((entry) => entry.name.toLowerCase() === domain.toLowerCase())?.id;
+        if (!list.has_more || list.data.length === 0) break;
+        after = list.data.at(-1)!.id;
+      }
+    }
+    if (!id) throw new Error("Sending domain was not found at the provider");
+    const data = z
+      .object({
+        id: z.string(),
+        name: z.string(),
+        open_tracking: z.boolean().optional(),
+        click_tracking: z.boolean().optional(),
+        tracking_subdomain: z.string().nullish(),
+        records: z
+          .array(z.object({ record: z.string(), name: z.string(), status: z.string() }))
+          .default([]),
+      })
+      .parse(await read(`/domains/${encodeURIComponent(id)}`));
+    if (data.name.toLowerCase() !== domain.toLowerCase())
+      throw new Error("Provider domain does not match the sending domain");
+    const trackingDomain = data.tracking_subdomain
+      ? `${data.tracking_subdomain}.${data.name}`.toLowerCase()
+      : null;
+    const trackingRecord = data.records.find(
+      (record) => record.record === "Tracking" && record.name.toLowerCase() === trackingDomain
+    );
+    return {
+      providerDomainId: data.id,
+      domain: data.name.toLowerCase(),
+      openTrackingEnabled: data.open_tracking ?? null,
+      clickTrackingEnabled: data.click_tracking ?? null,
+      trackingDomain,
+      trackingVerified: trackingRecord?.status === "verified",
+    };
   }
 
   async sendBatch(

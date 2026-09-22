@@ -3,6 +3,12 @@ import { prisma } from "../../db/prisma.js";
 import type { EmailProvider } from "../../email/providers/EmailProvider.js";
 import { upsertSuppression } from "../suppressions/domain.js";
 import { recomputeCampaignStats } from "../analytics/service.js";
+import { config } from "../../config/index.js";
+import {
+  classifyBounce,
+  classifyClick,
+  shouldReplaceBounceClassification,
+} from "./classification.js";
 
 function isTestSendEvent(payload: Prisma.JsonValue): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
@@ -173,41 +179,90 @@ export async function processWebhookEvent(eventId: string): Promise<void> {
           },
         });
         break;
-      case "email.clicked":
+      case "email.clicked": {
+        const campaign = await tx.campaign.findUniqueOrThrow({
+          where: { id: recipient.campaignId },
+          select: { contentSnapshot: true },
+        });
+        const classification = classifyClick({
+          payload: event.payload,
+          contentSnapshot: campaign.contentSnapshot,
+          unsubscribeTokenHash: recipient.unsubscribeTokenHash,
+          baseUrl: config.baseUrl,
+        });
         await tx.campaignRecipient.update({
           where: { id: recipient.id },
           data: {
             clickedAt:
               recipient.clickedAt && recipient.clickedAt < time ? recipient.clickedAt : time,
+            ...(classification.linkPurpose === "listing" &&
+            classification.automationClassification !== "automated"
+              ? {
+                  listingClickedAt:
+                    recipient.listingClickedAt && recipient.listingClickedAt < time
+                      ? recipient.listingClickedAt
+                      : time,
+                }
+              : {}),
             lastProviderEventAt: latestEventAt,
           },
         });
+        await tx.emailEvent.update({
+          where: { id: event.id },
+          data: classification,
+        });
         break;
+      }
       case "email.delivery_delayed":
         await tx.campaignRecipient.update({
           where: { id: recipient.id },
-          data: { lastProviderEventAt: latestEventAt, lastErrorCode: "delivery_delayed" },
+          data: {
+            lastProviderEventAt: latestEventAt,
+            ...(recipient.sendState !== "PERMANENT_FAILED" &&
+            !recipient.deliveredAt &&
+            !recipient.bouncedAt &&
+            !recipient.providerSuppressedAt
+              ? { lastErrorCode: "delivery_delayed" }
+              : {}),
+          },
         });
         break;
-      case "email.bounced":
+      case "email.bounced": {
+        const bounce = classifyBounce(event.payload);
         await tx.campaignRecipient.update({
           where: { id: recipient.id },
           data: {
-            deliveryState: "BOUNCED",
+            deliveryState: recipient.deliveryState === "COMPLAINED" ? "COMPLAINED" : "BOUNCED",
             bouncedAt:
               recipient.bouncedAt && recipient.bouncedAt < time ? recipient.bouncedAt : time,
+            ...(shouldReplaceBounceClassification(recipient.bounceType, bounce.type)
+              ? {
+                  bounceType: bounce.type,
+                  bounceSubType: bounce.subType,
+                  bounceReason: bounce.reason,
+                }
+              : {}),
             lastProviderEventAt: latestEventAt,
           },
         });
         await upsertSuppression(tx, {
           email: recipient.email,
-          reason: "HARD_BOUNCE",
+          reason: bounce.suppressionReason,
           source: "RESEND",
           campaignId: recipient.campaignId,
           campaignRecipientId: recipient.id,
-          details: { webhookId: event.webhookId },
+          details: {
+            webhookId: event.webhookId,
+            bounceType: bounce.type,
+            bounceSubType: bounce.subType,
+            bounceReason: bounce.reason,
+            ...(bounce.type !== "Permanent"
+              ? { requiresReview: true, automaticRelease: false }
+              : {}),
+          },
         });
         break;
+      }
       case "email.complained":
         await tx.campaignRecipient.update({
           where: { id: recipient.id },
@@ -236,12 +291,12 @@ export async function processWebhookEvent(eventId: string): Promise<void> {
             ...(recipient.deliveryState !== "COMPLAINED" && recipient.deliveryState !== "BOUNCED"
               ? {
                   deliveryState: "PROVIDER_SUPPRESSED",
-                  providerSuppressedAt:
-                    recipient.providerSuppressedAt && recipient.providerSuppressedAt < time
-                      ? recipient.providerSuppressedAt
-                      : time,
                 }
               : {}),
+            providerSuppressedAt:
+              recipient.providerSuppressedAt && recipient.providerSuppressedAt < time
+                ? recipient.providerSuppressedAt
+                : time,
             lastProviderEventAt: latestEventAt,
           },
         });
@@ -279,20 +334,21 @@ export async function processWebhookEvent(eventId: string): Promise<void> {
     });
     const immediateStats =
       event.eventType === "email.bounced" || event.eventType === "email.complained";
-    if (!immediateStats) {
-      const bucketMs = 10_000;
-      const bucket = Math.floor(Date.now() / bucketMs);
-      await tx.job.upsert({
-        where: { uniqueKey: `RECOMPUTE_CAMPAIGN_STATS/${recipient.campaignId}/${bucket}` },
-        create: {
-          type: "RECOMPUTE_CAMPAIGN_STATS",
-          uniqueKey: `RECOMPUTE_CAMPAIGN_STATS/${recipient.campaignId}/${bucket}`,
-          payload: { campaignId: recipient.campaignId },
-          runAt: new Date((bucket + 1) * bucketMs),
-        },
-        update: {},
-      });
-    }
+    // Persist a fallback even for immediate updates: the event is committed as
+    // PROCESSED before recompute runs, so a failed recompute cannot rely on an
+    // event retry to rebuild statistics or run the deliverability guard.
+    const bucketMs = 10_000;
+    const bucket = Math.floor(Date.now() / bucketMs);
+    await tx.job.upsert({
+      where: { uniqueKey: `RECOMPUTE_CAMPAIGN_STATS/${recipient.campaignId}/${bucket}` },
+      create: {
+        type: "RECOMPUTE_CAMPAIGN_STATS",
+        uniqueKey: `RECOMPUTE_CAMPAIGN_STATS/${recipient.campaignId}/${bucket}`,
+        payload: { campaignId: recipient.campaignId },
+        runAt: new Date((bucket + 1) * bucketMs),
+      },
+      update: {},
+    });
     return { campaignId: recipient.campaignId, immediateStats };
   });
   if (result?.immediateStats) await recomputeCampaignStats(result.campaignId);

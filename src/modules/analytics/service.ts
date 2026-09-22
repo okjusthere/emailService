@@ -1,6 +1,6 @@
-import { Prisma } from "@prisma/client";
 import { prisma } from "../../db/prisma.js";
 import { logger } from "../../shared/logger.js";
+import { campaignStatsUpdate, readCampaignStats } from "./snapshot.js";
 
 function numericThreshold(
   value: unknown,
@@ -14,67 +14,9 @@ function numericThreshold(
 }
 
 export async function recomputeCampaignStats(campaignId: string) {
-  const [counts] = await prisma.$queryRaw<
-    Array<{
-      target_count: number;
-      eligible_count: number;
-      suppressed_count: number;
-      accepted_count: number;
-      delivered_count: number;
-      opened_count: number;
-      clicked_count: number;
-      bounced_count: number;
-      complained_count: number;
-      failed_count: number;
-      manual_review_count: number;
-    }>
-  >(Prisma.sql`
-    SELECT
-      COUNT(*)::int AS target_count,
-      COUNT(*) FILTER (WHERE send_state <> 'SUPPRESSED'::"RecipientSendState")::int AS eligible_count,
-      COUNT(*) FILTER (WHERE send_state = 'SUPPRESSED'::"RecipientSendState")::int AS suppressed_count,
-      COUNT(*) FILTER (WHERE send_state = 'ACCEPTED'::"RecipientSendState")::int AS accepted_count,
-      COUNT(*) FILTER (WHERE delivered_at IS NOT NULL)::int AS delivered_count,
-      COUNT(*) FILTER (WHERE opened_at IS NOT NULL)::int AS opened_count,
-      COUNT(*) FILTER (WHERE clicked_at IS NOT NULL)::int AS clicked_count,
-      COUNT(*) FILTER (WHERE delivery_state = 'BOUNCED'::"RecipientDeliveryState")::int AS bounced_count,
-      COUNT(*) FILTER (WHERE delivery_state = 'COMPLAINED'::"RecipientDeliveryState")::int AS complained_count,
-      COUNT(*) FILTER (WHERE send_state = 'PERMANENT_FAILED'::"RecipientSendState")::int AS failed_count,
-      COUNT(*) FILTER (WHERE send_state = 'MANUAL_REVIEW'::"RecipientSendState")::int AS manual_review_count
-    FROM campaign_recipients
-    WHERE campaign_id = ${campaignId}::uuid
-  `);
-  const {
-    target_count: targetCount = 0,
-    eligible_count: eligibleCount = 0,
-    suppressed_count: suppressedCount = 0,
-    accepted_count: acceptedCount = 0,
-    delivered_count: deliveredCount = 0,
-    opened_count: openedCount = 0,
-    clicked_count: clickedCount = 0,
-    bounced_count: bouncedCount = 0,
-    complained_count: complainedCount = 0,
-    failed_count: failedCount = 0,
-    manual_review_count: manualReviewCount = 0,
-  } = counts ?? ({} as Record<string, never>);
-  const stats = {
-    targetCount,
-    eligibleCount,
-    suppressedCount,
-    acceptedCount,
-    deliveredCount,
-    openedCount,
-    clickedCount,
-    bouncedCount,
-    complainedCount,
-    failedCount,
-    manualReviewCount,
-    deliveryRate: acceptedCount ? deliveredCount / acceptedCount : 0,
-    openRate: deliveredCount ? openedCount / deliveredCount : 0,
-    clickRate: deliveredCount ? clickedCount / deliveredCount : 0,
-    bounceRate: acceptedCount ? bouncedCount / acceptedCount : 0,
-    complaintRate: acceptedCount ? complainedCount / acceptedCount : 0,
-  };
+  const snapshot = await readCampaignStats(campaignId);
+  const { stats, reporting } = snapshot;
+  const { acceptedCount } = stats;
   const thresholdSetting = await prisma.systemSetting.findUnique({
     where: { key: "DELIVERABILITY_THRESHOLDS" },
   });
@@ -87,18 +29,7 @@ export async function recomputeCampaignStats(campaignId: string) {
   await prisma.$transaction(async (tx) => {
     const campaign = await tx.campaign.update({
       where: { id: campaignId },
-      data: {
-        targetCount,
-        eligibleCount,
-        suppressedCount,
-        acceptedCount,
-        deliveredCount,
-        openedCount,
-        clickedCount,
-        bouncedCount,
-        complainedCount,
-        failedCount,
-      },
+      data: campaignStatsUpdate(snapshot),
       select: { senderProfileId: true },
     });
     if (thresholdExceeded) {
@@ -146,7 +77,7 @@ export async function recomputeCampaignStats(campaignId: string) {
       },
       "Campaign paused and sender suspended by deliverability guard"
     );
-  return stats;
+  return { ...stats, reporting };
 }
 
 export async function dashboardSummary() {
