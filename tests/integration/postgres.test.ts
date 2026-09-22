@@ -1862,7 +1862,7 @@ describe("PostgreSQL delivery invariants", () => {
     expect(usage).toMatchObject({ reservedCount: 0, acceptedCount: 2 });
   });
 
-  it("freezes tracking across retries and observes a changed domain only for new batches", async () => {
+  it("preserves retry history but marks coverage unknown after domain configuration changes", async () => {
     class TrackedProvider extends FakeEmailProvider {
       enabled = true;
       calls = 0;
@@ -1895,18 +1895,99 @@ describe("PostgreSQL delivery invariants", () => {
     const accepted = await prisma.campaignRecipient.findUniqueOrThrow({
       where: { id: first.recipients[0]!.id },
     });
-    expect(accepted).toMatchObject({ clickTrackingEnabled: true, openTrackingEnabled: false });
+    expect(accepted).toMatchObject({ clickTrackingEnabled: null, openTrackingEnabled: null });
     expect(
       (await prisma.sendBatch.findUniqueOrThrow({ where: { id: claimed.batchId } }))
         .trackingSnapshot
     ).toEqual(frozen);
+    expect(
+      await prisma.sendBatch.findUniqueOrThrow({ where: { id: claimed.batchId } })
+    ).toMatchObject({ trackingCoverageUncertain: true });
     const second = await createFixture(1);
     const next = await reserveAll(second);
     await executeReservedBatch(second.campaign.id, next.batchId);
     expect(
       await prisma.campaignRecipient.findUniqueOrThrow({ where: { id: second.recipients[0]!.id } })
     ).toMatchObject({ clickTrackingEnabled: false, openTrackingEnabled: false });
-    expect(provider.calls).toBe(2);
+    expect(provider.calls).toBe(3);
+  });
+
+  it.each([true, false])(
+    "retains known retry coverage when click tracking remains %s",
+    async (enabled) => {
+      class StableTrackingProvider extends FakeEmailProvider {
+        calls = 0;
+        async getDomainTracking(domain: string) {
+          this.calls++;
+          return {
+            providerDomainId: "stable-domain",
+            domain,
+            openTrackingEnabled: false,
+            clickTrackingEnabled: enabled,
+            trackingDomain: `links.${domain}`,
+            trackingVerified: true,
+          };
+        }
+      }
+      const provider = new StableTrackingProvider();
+      setEmailProviderForTest(provider);
+      await prisma.providerDomainTracking.deleteMany({ where: { domain: "example.com" } });
+      const fixture = await createFixture(1);
+      const claimed = await reserveAll(fixture);
+      provider.mode = "temporary";
+      await executeReservedBatch(fixture.campaign.id, claimed.batchId);
+      const frozen = (await prisma.sendBatch.findUniqueOrThrow({ where: { id: claimed.batchId } }))
+        .trackingSnapshot;
+      provider.mode = "accepted";
+      await executeReservedBatch(fixture.campaign.id, claimed.batchId);
+      expect(
+        await prisma.campaignRecipient.findUniqueOrThrow({
+          where: { id: fixture.recipients[0]!.id },
+        })
+      ).toMatchObject({ clickTrackingEnabled: enabled, openTrackingEnabled: false });
+      expect(
+        await prisma.sendBatch.findUniqueOrThrow({ where: { id: claimed.batchId } })
+      ).toMatchObject({ trackingSnapshot: frozen, trackingCoverageUncertain: false });
+      expect(provider.calls).toBe(2);
+    }
+  );
+
+  it("keeps retry coverage unknown after an unavailable observation even if settings recover", async () => {
+    class RecoveringTrackingProvider extends FakeEmailProvider {
+      unavailable = false;
+      async getDomainTracking(domain: string) {
+        if (this.unavailable) throw new Error("temporary observation failure");
+        return {
+          providerDomainId: "recovering-domain",
+          domain,
+          openTrackingEnabled: false,
+          clickTrackingEnabled: true,
+          trackingDomain: `links.${domain}`,
+          trackingVerified: true,
+        };
+      }
+    }
+    const provider = new RecoveringTrackingProvider();
+    setEmailProviderForTest(provider);
+    await prisma.providerDomainTracking.deleteMany({ where: { domain: "example.com" } });
+    const fixture = await createFixture(1);
+    const claimed = await reserveAll(fixture);
+    provider.mode = "temporary";
+    await executeReservedBatch(fixture.campaign.id, claimed.batchId);
+    const frozen = (await prisma.sendBatch.findUniqueOrThrow({ where: { id: claimed.batchId } }))
+      .trackingSnapshot;
+    provider.unavailable = true;
+    await executeReservedBatch(fixture.campaign.id, claimed.batchId);
+    provider.unavailable = false;
+    await observeDomainTracking(fixture.sender.provider, "example.com", true);
+    provider.mode = "accepted";
+    await executeReservedBatch(fixture.campaign.id, claimed.batchId);
+    expect(
+      await prisma.campaignRecipient.findUniqueOrThrow({ where: { id: fixture.recipients[0]!.id } })
+    ).toMatchObject({ clickTrackingEnabled: null, openTrackingEnabled: null });
+    expect(
+      await prisma.sendBatch.findUniqueOrThrow({ where: { id: claimed.batchId } })
+    ).toMatchObject({ trackingSnapshot: frozen, trackingCoverageUncertain: true });
   });
 
   it("keeps historical acceptance and partial click denominators in the persisted report", async () => {

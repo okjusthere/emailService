@@ -767,6 +767,7 @@ model SendBatch {
   idempotencyKey       String                   @unique @map("idempotency_key")
   requestHash          String                   @map("request_hash")
   trackingSnapshot     Json?                    @map("tracking_snapshot")
+  trackingCoverageUncertain Boolean             @default(false) @map("tracking_coverage_uncertain")
   recipientCount       Int                      @map("recipient_count")
   acceptedCount        Int                      @default(0) @map("accepted_count")
   failedCount          Int                      @default(0) @map("failed_count")

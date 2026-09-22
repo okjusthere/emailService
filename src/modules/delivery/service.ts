@@ -143,8 +143,12 @@ async function finishBatch(input: {
             sendState: "ACCEPTED",
             resendEmailId: item.providerEmailId,
             acceptedAt: new Date(),
-            clickTrackingEnabled: tracking?.clickTrackingEnabled ?? null,
-            openTrackingEnabled: tracking?.openTrackingEnabled ?? null,
+            clickTrackingEnabled: batch.trackingCoverageUncertain
+              ? null
+              : (tracking?.clickTrackingEnabled ?? null),
+            openTrackingEnabled: batch.trackingCoverageUncertain
+              ? null
+              : (tracking?.openTrackingEnabled ?? null),
             trackingCheckedAt: tracking?.checkedAt ? new Date(tracking.checkedAt) : null,
             trackingRevision: tracking?.revision ?? null,
             attemptCount: { increment: 1 },
@@ -284,6 +288,30 @@ async function executeBatch(
     (existingBatch.attemptCount > 0
       ? unknownTrackingSnapshot(campaign.senderProfile.provider, sendingDomain)
       : await observeDomainTracking(campaign.senderProfile.provider, sendingDomain));
+  let trackingCoverageUncertain = existingBatch.trackingCoverageUncertain;
+  if (existingBatch.attemptCount > 0 && !trackingCoverageUncertain) {
+    // A rejected request may only be accepted on this retry, using today's domain
+    // configuration. Keep the original snapshot as history, but never claim its
+    // coverage still applies when the configuration boundary is uncertain.
+    const current = await observeDomainTracking(
+      campaign.senderProfile.provider,
+      sendingDomain,
+      true
+    );
+    trackingCoverageUncertain =
+      !tracking.revision ||
+      !current.revision ||
+      tracking.openTrackingEnabled === null ||
+      tracking.clickTrackingEnabled === null ||
+      current.openTrackingEnabled === null ||
+      current.clickTrackingEnabled === null ||
+      tracking.provider !== current.provider ||
+      tracking.domain !== current.domain ||
+      tracking.revision !== current.revision ||
+      tracking.trackingDomain !== current.trackingDomain ||
+      tracking.openTrackingEnabled !== current.openTrackingEnabled ||
+      tracking.clickTrackingEnabled !== current.clickTrackingEnabled;
+  }
   const preparedAttempt = await inTransaction(async (tx) => {
     await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id FROM send_batches WHERE id = ${batchId}::uuid FOR UPDATE
@@ -307,6 +335,7 @@ async function executeBatch(
         attemptCount: attemptNumber,
         startedAt: batch.startedAt ?? new Date(),
         trackingSnapshot: batch.trackingSnapshot ?? (tracking as unknown as Prisma.InputJsonValue),
+        trackingCoverageUncertain: batch.trackingCoverageUncertain || trackingCoverageUncertain,
       },
     });
     return { batch, attempt, attemptNumber };

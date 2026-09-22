@@ -100,8 +100,12 @@ export async function resolveManualReview(
     });
     const tracking = parseTrackingSnapshot(batch.trackingSnapshot);
     const coverage = {
-      clickTrackingEnabled: tracking?.clickTrackingEnabled ?? null,
-      openTrackingEnabled: tracking?.openTrackingEnabled ?? null,
+      clickTrackingEnabled: batch.trackingCoverageUncertain
+        ? null
+        : (tracking?.clickTrackingEnabled ?? null),
+      openTrackingEnabled: batch.trackingCoverageUncertain
+        ? null
+        : (tracking?.openTrackingEnabled ?? null),
       trackingCheckedAt: tracking?.checkedAt ? new Date(tracking.checkedAt) : null,
       trackingRevision: tracking?.revision ?? null,
     };
