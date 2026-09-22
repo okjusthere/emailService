@@ -97,9 +97,20 @@ export class ResendEmailProvider implements EmailProvider {
     const trackingDomain = data.tracking_subdomain
       ? `${data.tracking_subdomain}.${data.name}`.toLowerCase()
       : null;
-    const trackingRecord = data.records.find(
-      (record) => record.record === "Tracking" && record.name.toLowerCase() === trackingDomain
-    );
+    const trackingRecord = data.records.find((record) => {
+      if (record.record !== "Tracking" || !trackingDomain || !data.tracking_subdomain) return false;
+      const name = record.name.toLowerCase();
+      if (name.replace(/\.$/, "") === trackingDomain) return true;
+      // Resend can return DNS-zone-relative names, e.g. links.updates for
+      // links.updates.homixny.com. Match complete labels and the entire current
+      // tracking prefix so an obsolete tracking record cannot establish readiness.
+      const trackingPrefix = data.tracking_subdomain.toLowerCase();
+      return (
+        !name.endsWith(".") &&
+        (name === trackingPrefix || name.startsWith(`${trackingPrefix}.`)) &&
+        trackingDomain.startsWith(`${name}.`)
+      );
+    });
     // Resend may require CAA authorization before it can issue tracking TLS.
     const trackingCaaVerified = data.records
       .filter((record) => record.record === "TrackingCAA")

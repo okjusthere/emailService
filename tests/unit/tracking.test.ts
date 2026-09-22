@@ -54,6 +54,75 @@ describe("verified tracking coverage", () => {
 });
 
 describe("Resend domain configuration reads", () => {
+  it.each(["links.updates", "links", "links.updates.homixny.com", "LINKS.UPDATES.HOMIXNY.COM."])(
+    "recognizes the active tracking record with a zone-relative or fully qualified name (%s)",
+    async (name) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          Response.json({
+            id: "marketing-domain",
+            name: "updates.homixny.com",
+            open_tracking: false,
+            click_tracking: false,
+            tracking_subdomain: "links",
+            records: [
+              {
+                record: "Tracking",
+                type: "CNAME",
+                name,
+                value: "links2.resend-dns.com",
+                status: "verified",
+              },
+            ],
+          })
+        )
+      );
+      expect(
+        await new ResendEmailProvider("re_test", "whsec_test").getDomainTracking(
+          "updates.homixny.com",
+          "marketing-domain"
+        )
+      ).toMatchObject({
+        trackingDomain: "links.updates.homixny.com",
+        trackingVerified: true,
+        openTrackingEnabled: false,
+        clickTrackingEnabled: false,
+      });
+    }
+  );
+  it.each([
+    "old.updates",
+    "links.legacy",
+    "links.updat",
+    "links.updates.evil.com",
+    "links.updates.",
+  ])(
+    "does not use an obsolete or unrelated relative record to verify the active tracking domain (%s)",
+    async (obsoleteName) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          Response.json({
+            id: "marketing-domain",
+            name: "updates.homixny.com",
+            click_tracking: true,
+            tracking_subdomain: "links",
+            records: [
+              { record: "Tracking", name: obsoleteName, status: "verified" },
+              { record: "Tracking", name: "links.updates", status: "not_started" },
+            ],
+          })
+        )
+      );
+      expect(
+        await new ResendEmailProvider("re_test", "whsec_test").getDomainTracking(
+          "updates.homixny.com",
+          "marketing-domain"
+        )
+      ).toMatchObject({ trackingVerified: false });
+    }
+  );
   it("paginates domains and checks the active tracking CNAME rather than only sending verification", async () => {
     const fetch = vi
       .fn()
