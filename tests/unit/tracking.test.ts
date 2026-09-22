@@ -112,6 +112,31 @@ describe("Resend domain configuration reads", () => {
       )
     ).rejects.toThrow("does not match");
   });
+  it.each(["pending", "failed", "verified"])(
+    "requires TrackingCAA authorization when present (%s)",
+    async (status) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          Response.json({
+            id: "ours",
+            name: "updates.example.com",
+            click_tracking: true,
+            tracking_subdomain: "links",
+            records: [
+              { record: "Tracking", name: "links.updates.example.com", status: "verified" },
+              { record: "TrackingCAA", name: "updates.example.com", status },
+            ],
+          })
+        )
+      );
+      const observation = await new ResendEmailProvider("re_test", "whsec_test").getDomainTracking(
+        "updates.example.com",
+        "ours"
+      );
+      expect(observation.trackingVerified).toBe(status === "verified");
+    }
+  );
   it("retains unknown booleans when the provider omits capabilities", async () => {
     vi.stubGlobal(
       "fetch",

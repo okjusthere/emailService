@@ -100,13 +100,17 @@ export class ResendEmailProvider implements EmailProvider {
     const trackingRecord = data.records.find(
       (record) => record.record === "Tracking" && record.name.toLowerCase() === trackingDomain
     );
+    // Resend may require CAA authorization before it can issue tracking TLS.
+    const trackingCaaVerified = data.records
+      .filter((record) => record.record === "TrackingCAA")
+      .every((record) => record.status === "verified");
     return {
       providerDomainId: data.id,
       domain: data.name.toLowerCase(),
       openTrackingEnabled: data.open_tracking ?? null,
       clickTrackingEnabled: data.click_tracking ?? null,
       trackingDomain,
-      trackingVerified: trackingRecord?.status === "verified",
+      trackingVerified: trackingRecord?.status === "verified" && trackingCaaVerified,
     };
   }
 
